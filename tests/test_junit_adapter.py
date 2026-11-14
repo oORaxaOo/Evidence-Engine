@@ -62,14 +62,24 @@ class JUnitReportAdapterTests(unittest.TestCase):
         target = (self.root / name).resolve()
         if write:
             # The command receives a fixed --junitxml path from CommandSpec.
-            # It writes the provided XML to that path; the adapter later checks
-            # this exact command evidence and path before parsing the report.
+            # Bytes are hex-encoded for the synthetic process argument so the
+            # UTF-16 security test exercises the actual file bytes.
+            if isinstance(xml_text, bytes):
+                write_expression = (
+                    "Path(sys.argv[1].split('=', 1)[1]).write_bytes(bytes.fromhex(sys.argv[2]))"
+                )
+                content_argument = xml_text.hex()
+            else:
+                write_expression = (
+                    "Path(sys.argv[1].split('=', 1)[1]).write_text(sys.argv[2], encoding='utf-8')"
+                )
+                content_argument = xml_text or ""
             code = (
                 "from pathlib import Path; import sys; "
-                "Path(sys.argv[1].split('=', 1)[1]).write_text(sys.argv[2], encoding='utf-8'); "
-                "raise SystemExit(int(sys.argv[3]))"
+                + write_expression
+                + "; raise SystemExit(int(sys.argv[3]))"
             )
-            args = (code, f"--junitxml={target}", xml_text or "", str(exit_code))
+            args = (code, f"--junitxml={target}", content_argument, str(exit_code))
         else:
             code = "pass"
             args = (code, f"--junitxml={target}")
