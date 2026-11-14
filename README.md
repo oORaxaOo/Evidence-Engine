@@ -80,7 +80,7 @@ print(final_task.status)  # passed only if recorded evidence supports the criter
 
 ## Development status
 
-The adapters are local host-side components. The Hermes bridge, a dedicated read-only API, OS sandboxing, and external signed checkpoints are not implemented yet. No WhatsApp or Hermes configuration is changed by this repository.
+The adapters are local host-side components. A read-only `EvidenceReader` façade is implemented. The Hermes tool bridge, OS sandboxing, and external signed checkpoints are not implemented yet. No WhatsApp or Hermes configuration is changed by this repository.
 
 See:
 - [Architecture](docs/architecture.md)
