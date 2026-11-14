@@ -150,9 +150,26 @@ print(report["ledger_integrity"])
 
 The returned report is a read-only snapshot of the task, current evidence, and newest verification. Evidence is paginated (maximum 500 records per page). If a verification is stale, inconsistent with its stored report, or the evidence chain is invalid, a terminal success is downgraded to `unknown` in `effective_status`. The original stored task status remains visible separately in `report["task"]["status"]`.
 
+
+### Connect through the read-only stdio bridge
+
+For a host process that needs a simple local protocol, Evidence Engine includes a newline-delimited JSON-RPC 2.0 bridge:
+
+```bash
+PYTHONPATH=src python -m evidence_engine.bridge --db /absolute/path/evidence.sqlite3
+```
+
+Each input line is one request; each output line is one response. The bridge exposes only `get_task`, `list_evidence`, `get_latest_verification`, `verify_integrity`, and `get_task_report`. It rejects unknown and mutating methods and caps request lines at 1 MiB by default. It is a generic stdio transport, not an MCP server or a Hermes integration. The host must control the process launch and database permissions.
+
+Example request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"get_task_report","params":{"task_id":"TASK_ID"}}
+```
+
 ## Development status
 
-The core ledger, host-side command/file/JUnit adapters, and read-only EvidenceReader facade are implemented on the development branch. A Hermes bridge, external signed checkpoints, and broader process/filesystem isolation remain future work. Nothing in this repository automatically changes Hermes, WhatsApp, or Genesis configuration.
+The core ledger, host-side command/file/JUnit adapters, and read-only EvidenceReader facade are implemented on the development branch. A Hermes-specific bridge, external signed checkpoints, and broader process/filesystem isolation remain future work. Nothing in this repository automatically changes Hermes, WhatsApp, or Genesis configuration.
 
 See:
 - [Architecture](docs/architecture.md)
