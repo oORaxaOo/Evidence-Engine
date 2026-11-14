@@ -3,8 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evidence_engine import Criterion, EvidenceEngine, TaskStatus
-from evidence_engine.reader import EvidenceReader
+from evidence_engine import Criterion, EvidenceEngine, EvidenceReader, TaskStatus
 
 
 class EvidenceReaderTests(unittest.TestCase):
@@ -36,7 +35,6 @@ class EvidenceReaderTests(unittest.TestCase):
         self.reader = EvidenceReader(self.database)
 
     def tearDown(self):
-        self.engine._db().close if False else None
         self.temp_dir.cleanup()
 
     def test_reader_returns_task_evidence_and_latest_verification(self):
