@@ -27,6 +27,24 @@ _DEFAULT_DB = Path.home() / ".hermes" / "evidence-engine" / "evidence.sqlite3"
 _DEFAULT_POLICY = Path.home() / ".hermes" / "evidence-engine" / "policies.json"
 _MAX_COMMANDS = 10
 _MAX_ATTEMPTS = 5
+_NON_RETRYABLE_GATE_REASONS = frozenset({
+    "invalid_report",
+    "task_record_missing",
+    "task_id_missing",
+    "success_criteria_missing",
+    "ledger_integrity",
+    "verification_not_current",
+    "verification_record_invalid",
+    "verification_record_inconsistent",
+    "verification_sequence_mismatch",
+    "evidence_truncated",
+    "evidence_snapshot_incomplete",
+    "evidence_identifiers_invalid",
+    "verification_missing",
+    "verification_report_missing",
+    "verification_task_mismatch",
+    "criterion_check_count_mismatch",
+})
 
 
 class PolicyError(ValueError):
@@ -402,6 +420,12 @@ def register(ctx: Any) -> None:
             pending_by_session[key] = next_state
 
             if decision.released:
+                return None
+
+            if set(decision.reasons) & _NON_RETRYABLE_GATE_REASONS:
+                next_state["reason"] = (
+                    "verification integrity failure; " + next_state["reason"]
+                )
                 return None
 
             if attempt + 1 >= max_attempts:
