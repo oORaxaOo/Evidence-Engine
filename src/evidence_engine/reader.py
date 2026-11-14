@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ class EvidenceReader:
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
             or timeout_seconds <= 0
         ):
             raise ValueError("timeout_seconds must be a positive number")
@@ -101,7 +103,11 @@ class EvidenceReader:
         }
 
     @staticmethod
-    def _verification_from_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _verification_from_row(
+        row: sqlite3.Row | None,
+        *,
+        task_id: str,
+    ) -> dict[str, Any] | None:
         if row is None:
             return None
         try:
@@ -110,11 +116,23 @@ class EvidenceReader:
             raise ValueError(
                 f"verification record {row['verification_id']} contains invalid JSON"
             ) from exc
+
+        valid_statuses = {"supported", "contradicted", "inconclusive", "invalid"}
+        record_consistent = (
+            isinstance(report, dict)
+            and row["status"] in valid_statuses
+            and report.get("task_id") == task_id
+            and report.get("status") == row["status"]
+            and report.get("verified_at") == row["verified_at"]
+            and report.get("evidence_sequence") == row["evidence_sequence"]
+            and isinstance(report.get("checks"), list)
+        )
         return {
             "verification_id": row["verification_id"],
             "status": row["status"],
             "verified_at": row["verified_at"],
             "evidence_sequence": row["evidence_sequence"],
+            "record_consistent": record_consistent,
             "report": report,
         }
 
@@ -207,7 +225,7 @@ class EvidenceReader:
                 """,
                 (task_id,),
             ).fetchone()
-            return self._verification_from_row(row)
+            return self._verification_from_row(row, task_id=task_id)
         finally:
             connection.close()
 
@@ -289,11 +307,17 @@ class EvidenceReader:
             ).fetchall()
 
             evidence = [self._evidence_from_row(row) for row in evidence_rows]
-            verification = self._verification_from_row(verification_row)
+            verification = self._verification_from_row(
+                verification_row,
+                task_id=task_id,
+            )
             ledger_integrity = self._integrity_from_rows(all_evidence_rows)
 
+            verification_record_valid = (
+                verification is not None and verification["record_consistent"]
+            )
             verification_current = (
-                verification is not None
+                verification_record_valid
                 and verification["evidence_sequence"] == latest_sequence
             )
 
@@ -301,13 +325,22 @@ class EvidenceReader:
             if not ledger_integrity:
                 effective_status = TaskStatus.UNKNOWN.value
                 reliability_note = "evidence_hash_chain_invalid"
+            elif verification is not None and not verification_record_valid:
+                effective_status = TaskStatus.UNKNOWN.value
+                reliability_note = "verification_record_inconsistent"
             elif stored_status in {TaskStatus.PASSED.value, TaskStatus.FAILED.value}:
-                if verification_current:
+                expected_status = {
+                    "supported": TaskStatus.PASSED.value,
+                    "contradicted": TaskStatus.FAILED.value,
+                    "invalid": TaskStatus.FAILED.value,
+                    "inconclusive": TaskStatus.UNKNOWN.value,
+                }.get(verification["status"]) if verification_current else None
+                if expected_status != stored_status:
+                    effective_status = TaskStatus.UNKNOWN.value
+                    reliability_note = "task_status_mismatches_verification"
+                else:
                     effective_status = stored_status
                     reliability_note = None
-                else:
-                    effective_status = TaskStatus.UNKNOWN.value
-                    reliability_note = "terminal_status_has_no_current_verification"
             elif verification is not None and not verification_current:
                 effective_status = TaskStatus.UNKNOWN.value
                 reliability_note = "verification_is_stale"
@@ -321,6 +354,7 @@ class EvidenceReader:
                 "reliability_note": reliability_note,
                 "ledger_integrity": ledger_integrity,
                 "verification_current": verification_current,
+                "verification_record_valid": verification_record_valid,
                 "latest_evidence_sequence": latest_sequence,
                 "evidence_total": evidence_total,
                 "evidence_offset": evidence_offset,
