@@ -21,6 +21,7 @@ It is deliberately independent of Hermes, WhatsApp, and any particular language 
 - Allowlisted file snapshots with traversal/symlink checks and stable SHA-256 reads. File contents are not stored.
 - JUnit XML parsing tied to a command result, matching `--junitxml` path, and report timestamps bounded by the command run.
 - Read-only JSON-RPC 2.0 stdio bridge with a fixed method allowlist and bounded request lines.
+- Coding-only host workflow with a fail-closed verification gate and at most five fresh, independently verified attempts.
 - No runtime dependencies; Python 3.11+.
 
 ## What it does not claim
@@ -81,12 +82,13 @@ print(final_task.status)  # passed only if recorded evidence supports the criter
 
 ## Development status
 
-The adapters and generic read-only stdio bridge are local host-side components. The bridge is not yet wired into Hermes. OS sandboxing and external signed checkpoints are not implemented. No WhatsApp or Hermes configuration is changed by this repository.
+The adapters, read-only stdio bridge, and bounded coding workflow are host-side components. The coding workflow is not yet wired into Hermes; it is not a global control for conversations, research, or other assistant tasks. OS sandboxing and external signed checkpoints are not implemented. No WhatsApp or Hermes configuration is changed by this repository.
 
 See:
 - [Architecture](docs/architecture.md)
 - [Adapters](docs/adapters.md)
 - [Threat model](docs/threat-model.md)
+- [Hermes coding integration contract](docs/hermes-coding-contract.md)
 
 ## License
 
