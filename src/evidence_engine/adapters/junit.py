@@ -122,8 +122,14 @@ class JUnitReportAdapter:
             raise ValueError("command did not complete as a started, non-timeout process")
         if command.get("output_limit_exceeded") is True:
             raise ValueError("command output limit was exceeded; report provenance is inconclusive")
+        return_code = command.get("return_code")
+        if isinstance(return_code, bool) or not isinstance(return_code, int):
+            raise ValueError("command evidence has no final process exit code")
 
         command_started = _parse_timestamp(command.get("started_at"))
+        command_finished = _parse_timestamp(command.get("finished_at"))
+        if command_finished < command_started:
+            raise ValueError("command evidence has an invalid execution time range")
         expected_output_path = self._junit_output_path(command.get("argv"), command.get("cwd"))
         root, resolved = self.policy.resolve(relative_path)
         if expected_output_path != resolved:
@@ -175,6 +181,9 @@ class JUnitReportAdapter:
                         if modified_at < command_started:
                             stable_read = False
                             inspection_error = "JUnit report predates the command execution"
+                        elif modified_at > command_finished:
+                            stable_read = False
+                            inspection_error = "JUnit report was modified after command completion"
                         elif re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", content, re.IGNORECASE):
                             parse_status = "invalid"
                             inspection_error = "DTD/entity declarations are not allowed in JUnit reports"
