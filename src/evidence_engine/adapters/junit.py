@@ -24,7 +24,7 @@ from .file import FilePolicy
 
 _SOURCE = "evidence_engine.junit_report_adapter"
 _COMMAND_SOURCE_PREFIX = "evidence_engine.command_adapter:"
-_DTD_OR_ENTITY = re.compile(br"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
+_DTD_OR_ENTITY = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _COUNT_FIELDS = ("tests", "failures", "errors", "skipped")
 
 
