@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .engine import Criterion, EvidenceEngine, TaskStatus
@@ -229,7 +230,7 @@ class CodingWorkflow:
             raise ValueError(
                 f"evidence_limit must be an integer from 1 to {_MAX_EVIDENCE_PAGE}"
             )
-        if str(reader.db_path) != str(__import__("pathlib").Path(engine.db_path).expanduser().resolve()):
+        if str(reader.db_path) != str(Path(engine.db_path).expanduser().resolve()):
             raise ValueError("engine and reader must point to the same evidence database")
 
         self.engine = engine
