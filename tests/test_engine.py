@@ -100,6 +100,24 @@ class EvidenceEngineTests(unittest.TestCase):
                 )
         self.assertEqual(len(self.engine.get_task(task.task_id).criteria), 1)
 
+    def test_concurrent_evidence_writes_keep_one_valid_hash_chain(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        task_id = self.make_running_task()
+
+        def record(index):
+            return self.engine.record_evidence(
+                task_id, kind="concurrent_observation", source="test-runner",
+                payload={"index": index},
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            evidence_ids = list(pool.map(record, range(24)))
+
+        self.assertEqual(len(evidence_ids), 24)
+        self.assertEqual(len(set(evidence_ids)), 24)
+        self.assertTrue(self.engine.verify_integrity())
+
     def test_ledger_detects_payload_tampering(self):
         task_id = self.make_running_task()
         self.engine.record_evidence(
