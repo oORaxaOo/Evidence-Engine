@@ -92,6 +92,33 @@ class CommandAdapterTests(unittest.TestCase):
         self.assertTrue(payload["output_limit_exceeded"])
         self.assertNotIn("stdout_preview", payload)
 
+    def test_sensitive_arguments_are_redacted_from_recorded_evidence(self):
+        task_id = self.make_running_task()
+        secret = "token=do-not-store-this"
+        spec = CommandSpec(
+            command_id="safe-check",
+            argv=(sys.executable, "-c", "pass", secret),
+            cwd=Path(self.temp_dir.name),
+            redacted_argument_indexes=(3,),
+        )
+        result = CommandAdapter([spec]).run(self.engine, task_id, "safe-check")
+
+        self.assertEqual(result.return_code, 0)
+        evidence_text = repr(self.engine.list_evidence(task_id))
+        self.assertNotIn(secret, evidence_text)
+        self.assertIn("<redacted>", evidence_text)
+
+    def test_redaction_indexes_must_be_unique_and_within_argv(self):
+        for indexes in ((3,), (-1,), (True,), (2, 2)):
+            with self.subTest(indexes=indexes):
+                with self.assertRaises(ValueError):
+                    CommandSpec(
+                        command_id="safe-check",
+                        argv=(sys.executable, "-c", "pass"),
+                        cwd=Path(self.temp_dir.name),
+                        redacted_argument_indexes=indexes,
+                    )
+
     def test_unregistered_command_id_is_rejected_without_running_anything(self):
         task_id = self.make_running_task()
         adapter = self.make_adapter("raise SystemExit(0)")
@@ -143,31 +170,6 @@ class CommandAdapterTests(unittest.TestCase):
                 command_id="shell",
                 argv=("/bin/sh", "-c", "true"),
                 cwd=Path(self.temp_dir.name),
-            )
-
-    def test_sensitive_arguments_are_redacted_from_stored_evidence(self):
-        task_id = self.make_running_task()
-        secret = "token=do-not-store-this"
-        spec = CommandSpec(
-            command_id="test",
-            argv=(sys.executable, "-c", "pass", secret),
-            cwd=Path(self.temp_dir.name),
-            redacted_argument_indexes=(3,),
-        )
-        result = CommandAdapter([spec]).run(self.engine, task_id, "test")
-
-        self.assertEqual(result.return_code, 0)
-        evidence_text = repr(self.engine.list_evidence(task_id))
-        self.assertNotIn(secret, evidence_text)
-        self.assertIn("<redacted>", evidence_text)
-
-    def test_redaction_indexes_must_be_within_the_command_argv(self):
-        with self.assertRaises(ValueError):
-            CommandSpec(
-                command_id="test",
-                argv=(sys.executable, "-c", "pass"),
-                cwd=Path(self.temp_dir.name),
-                redacted_argument_indexes=(3,),
             )
 
 
