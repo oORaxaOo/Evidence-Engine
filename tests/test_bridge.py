@@ -13,6 +13,7 @@ class EvidenceBridgeTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database = Path(self.temp_dir.name) / "evidence.sqlite3"
         writer = EvidenceEngine(self.database)
+        self.writer = writer
         task = writer.create_task(
             "Bridge read-only test",
             [
@@ -45,51 +46,100 @@ class EvidenceBridgeTests(unittest.TestCase):
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
-            "params": params or {},
+            "params": {} if params is None else params,
         }
 
-    def test_get_task_report_returns_serializable_evidence_and_verification(self):
-        response = self.bridge.handle(self.request(
-            "get_task_report",
-            {"task_id": self.task_id},
-        ))
+    def test_get_task_report_returns_snapshot_with_effective_status(self):
+        response = self.bridge.handle(
+            self.request("get_task_report", {"task_id": self.task_id})
+        )
 
         self.assertEqual(response["id"], 1)
-        result = response["result"]
-        self.assertEqual(result["task"]["status"], "passed")
-        self.assertEqual(result["evidence"][0]["payload"]["passed"], True)
-        self.assertEqual(result["latest_verification"]["status"], "supported")
-        self.assertTrue(result["integrity_valid"])
-        json.dumps(response)
+        report = response["result"]
+        self.assertEqual(report["task"]["status"], TaskStatus.PASSED.value)
+        self.assertEqual(report["effective_status"], TaskStatus.PASSED.value)
+        self.assertTrue(report["verification_current"])
+        self.assertTrue(report["verification_record_valid"])
+        self.assertTrue(report["ledger_integrity"])
+        self.assertEqual(report["evidence"][0]["payload"]["passed"], True)
+        self.assertEqual(report["verification"]["status"], "supported")
+        json.dumps(response, allow_nan=False)
 
-    def test_reader_methods_are_exposed_individually(self):
-        task = self.bridge.handle(self.request("get_task", {"task_id": self.task_id}))
-        evidence = self.bridge.handle(self.request("list_evidence", {"task_id": self.task_id}))
+    def test_read_only_methods_are_available_individually(self):
+        task = self.bridge.handle(
+            self.request("get_task", {"task_id": self.task_id})
+        )
+        evidence = self.bridge.handle(
+            self.request("list_evidence", {"task_id": self.task_id})
+        )
         verification = self.bridge.handle(
             self.request("get_latest_verification", {"task_id": self.task_id})
         )
         integrity = self.bridge.handle(self.request("verify_integrity"))
 
-        self.assertEqual(task["result"]["status"], "passed")
+        self.assertEqual(task["result"]["status"], TaskStatus.PASSED.value)
         self.assertEqual(len(evidence["result"]), 1)
         self.assertEqual(verification["result"]["status"], "supported")
+        self.assertTrue(verification["result"]["record_consistent"])
         self.assertTrue(integrity["result"]["valid"])
 
-    def test_unknown_or_mutating_methods_are_not_exposed(self):
-        for method in ("record_evidence", "create_task", "finalize_task", "execute_command", "query_sql"):
-            response = self.bridge.handle(self.request(method))
-            self.assertEqual(response["error"]["code"], -32601)
+    def test_evidence_pagination_is_forwarded_to_the_reader(self):
+        task = self.writer.create_task(
+            "Paginated evidence task",
+            [Criterion("probe", "value", "exists", source="trusted-test")],
+        )
+        self.writer.start_task(task.task_id)
+        for value in ("first", "second", "third"):
+            self.writer.record_evidence(
+                task.task_id,
+                kind="probe",
+                source="trusted-test",
+                payload={"value": value},
+            )
+
+        response = self.bridge.handle(
+            self.request(
+                "get_task_report",
+                {"task_id": task.task_id, "evidence_limit": 1, "evidence_offset": 1},
+            )
+        )
+
+        self.assertEqual(response["result"]["evidence_total"], 3)
+        self.assertEqual(len(response["result"]["evidence"]), 1)
+        self.assertEqual(
+            response["result"]["evidence"][0]["payload"]["value"],
+            "second",
+        )
+        self.assertTrue(response["result"]["evidence_truncated"])
+
+    def test_unknown_and_mutating_methods_are_not_exposed(self):
+        for method in (
+            "record_evidence",
+            "create_task",
+            "start_task",
+            "finalize_task",
+            "execute_command",
+            "query_sql",
+        ):
+            with self.subTest(method=method):
+                response = self.bridge.handle(self.request(method))
+                self.assertEqual(response["error"]["code"], -32601)
 
         self.assertEqual(len(self.reader.list_evidence(self.task_id)), 1)
 
-    def test_invalid_params_are_rejected(self):
-        response = self.bridge.handle(self.request("get_task", {"task_id": 5}))
-        self.assertEqual(response["error"]["code"], -32602)
-
-        response = self.bridge.handle(
-            self.request("get_task", {"task_id": self.task_id, "sql": "DELETE FROM tasks"})
-        )
-        self.assertEqual(response["error"]["code"], -32602)
+    def test_invalid_params_and_unexpected_fields_are_rejected(self):
+        cases = [
+            ("get_task", {"task_id": 5}),
+            ("get_task", {"task_id": self.task_id, "sql": "DELETE FROM tasks"}),
+            ("list_evidence", {"task_id": self.task_id, "limit": True}),
+            ("list_evidence", {"task_id": self.task_id, "offset": -1}),
+            ("get_task_report", {"task_id": self.task_id, "write": True}),
+            ("verify_integrity", {"task_id": self.task_id}),
+        ]
+        for method, params in cases:
+            with self.subTest(method=method, params=params):
+                response = self.bridge.handle(self.request(method, params))
+                self.assertEqual(response["error"]["code"], -32602)
 
     def test_malformed_json_and_invalid_requests_return_protocol_errors(self):
         malformed = self.bridge.handle_line("{not-json")
@@ -98,18 +148,32 @@ class EvidenceBridgeTests(unittest.TestCase):
         invalid = self.bridge.handle({})
         self.assertEqual(invalid["error"]["code"], -32600)
 
-    def test_unknown_task_returns_not_found_without_internal_traceback(self):
-        response = self.bridge.handle(self.request("get_task", {"task_id": "not-a-task"}))
+        notification = self.bridge.handle(
+            {"jsonrpc": "2.0", "method": "verify_integrity", "params": {}}
+        )
+        self.assertEqual(notification["error"]["code"], -32600)
+
+    def test_unknown_task_does_not_leak_paths_or_stack_traces(self):
+        response = self.bridge.handle(
+            self.request("get_task", {"task_id": "not-a-task"})
+        )
+        encoded = json.dumps(response)
         self.assertEqual(response["error"]["code"], -32004)
-        self.assertNotIn("traceback", json.dumps(response).lower())
-        self.assertNotIn(str(self.database), json.dumps(response))
+        self.assertNotIn("traceback", encoded.lower())
+        self.assertNotIn(str(self.database), encoded)
 
     def test_request_line_size_limit_is_enforced(self):
-        response = self.bridge.handle_line(
+        oversized = self.bridge.handle_line(
             json.dumps(self.request("verify_integrity")).ljust(1025, " "),
             max_line_bytes=128,
         )
-        self.assertEqual(json.loads(response)["error"]["code"], -32600)
+        self.assertEqual(json.loads(oversized)["error"]["code"], -32600)
+
+    def test_json_non_finite_numbers_are_rejected(self):
+        response = self.bridge.handle_line(
+            '{"jsonrpc":"2.0","id":1,"method":"list_evidence","params":{"task_id":"x","limit":NaN}}'
+        )
+        self.assertEqual(json.loads(response)["error"]["code"], -32700)
 
     def test_stdio_transport_handles_multiple_lines(self):
         requests = [
@@ -131,10 +195,10 @@ class EvidenceBridgeTests(unittest.TestCase):
             for line in destination.getvalue().decode("utf-8").splitlines()
         ]
         self.assertEqual(len(responses), 2)
-        self.assertEqual(responses[0]["result"]["status"], "passed")
+        self.assertEqual(responses[0]["result"]["status"], TaskStatus.PASSED.value)
         self.assertTrue(responses[1]["result"]["valid"])
 
-    def test_stdio_transport_rejects_oversized_line_and_continues(self):
+    def test_stdio_transport_discards_oversized_line_and_continues(self):
         oversized = json.dumps(self.request("verify_integrity")).ljust(2048, " ")
         valid = json.dumps(self.request("verify_integrity", request_id=2))
         source = io.BytesIO((oversized + "\n" + valid + "\n").encode("utf-8"))
