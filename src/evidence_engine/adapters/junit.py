@@ -175,7 +175,7 @@ class JUnitReportAdapter:
                         if modified_at < command_started:
                             stable_read = False
                             inspection_error = "JUnit report predates the command execution"
-                        elif re.search(rb"<!\\s*(?:DOCTYPE|ENTITY)\\b", content, re.IGNORECASE):
+                        elif re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", content, re.IGNORECASE):
                             parse_status = "invalid"
                             inspection_error = "DTD/entity declarations are not allowed in JUnit reports"
                         else:
