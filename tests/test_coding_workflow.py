@@ -173,6 +173,40 @@ class CodingWorkflowTests(unittest.TestCase):
         self.assertIn("ledger_integrity", decision.reasons)
 
 
+
+    def test_gate_rejects_duplicate_evidence_references_for_one_criterion(self):
+        task = self.engine.create_task(
+            "Duplicate reference check",
+            (
+                Criterion(
+                    kind="build_result",
+                    field="return_code",
+                    operator="eq",
+                    expected=0,
+                    source="trusted-build",
+                    min_evidence=2,
+                ),
+            ),
+        )
+        self.engine.start_task(task.task_id)
+        for _ in range(2):
+            self.engine.record_evidence(
+                task.task_id,
+                kind="build_result",
+                source="trusted-build",
+                payload={"return_code": 0},
+            )
+        self.engine.finalize_task(task.task_id)
+        report = self.reader.get_task_report(task.task_id)
+        checks = report["verification"]["report"]["checks"]
+        duplicate_id = checks[0]["evidence_ids"][0]
+        checks[0]["evidence_ids"] = [duplicate_id, duplicate_id]
+
+        decision = CodingVerificationGate().evaluate(report)
+
+        self.assertFalse(decision.released)
+        self.assertIn("criterion_1_evidence_missing", decision.reasons)
+
     def test_ledger_integrity_failure_escalates_without_retrying_code(self):
         calls = []
 
