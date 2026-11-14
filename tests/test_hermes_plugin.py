@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -174,6 +175,39 @@ class HermesPluginIntegrationTests(unittest.TestCase):
 
         self.assertIn("not verified", transformed.lower())
         self.assertIn("policy", transformed.lower())
+
+
+    def test_final_gate_blocks_while_pre_verify_callback_is_still_running(self):
+        self._write_policy()
+        ctx = self._register(max_attempts=2)
+        entered = threading.Event()
+        release = threading.Event()
+        results = []
+
+        def slow_command(self, engine, task_id, command_id):
+            entered.set()
+            release.wait(timeout=5)
+            raise RuntimeError("simulated slow host command")
+
+        with patch(
+            "evidence_engine.hermes_plugin.CommandAdapter.run",
+            new=slow_command,
+        ):
+            worker = threading.Thread(
+                target=lambda: results.append(self._pre_verify(ctx, attempt=0))
+            )
+            worker.start()
+            self.assertTrue(entered.wait(timeout=3))
+            transformed = ctx.hooks["transform_llm_output"](
+                response_text="Everything is complete.",
+                session_id=self.session_id,
+                model="test-model",
+                platform="whatsapp",
+            )
+            self.assertIn("not verified", transformed.lower())
+            release.set()
+            worker.join(timeout=5)
+            self.assertFalse(worker.is_alive())
 
     def test_attempts_beyond_configured_limit_cannot_continue(self):
         self._write_policy(failures=1, exit_code=1)
