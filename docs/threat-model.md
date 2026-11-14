@@ -20,7 +20,7 @@
 
 ## Out of scope / residual risks
 
-- **Privileged database attacker:** an actor with write access to the database file can disable triggers and rewrite the full chain. Use OS permissions and external signed checkpoints for stronger guarantees.
+- **Privileged database attacker:** an actor with write access to the database file can disable triggers, alter task status, or rewrite the full chain. Without an external checkpoint, suffix truncation/deletion is not detectable either. Use OS permissions and external signed checkpoints for stronger guarantees.
 - **False or compromised adapter:** the engine can verify that a submitted structured result matches a criterion; it cannot independently know whether a malicious adapter lied about the outside world.
 - **Spoofed source labels:** the `source` field is descriptive metadata, not an identity credential.
 - **Natural-language truth:** the engine does not establish factual truth of arbitrary text, summaries, or news analysis.
