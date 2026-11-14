@@ -61,7 +61,8 @@ The command adapter:
 - does not inherit the assistant process environment; only explicitly configured values are passed;
 - applies a bounded timeout and combined stdout/stderr byte limit;
 - terminates the process group on POSIX when a timeout or output limit is reached;
-- stores return code, timeout state, duration, output byte counts, and output hashes, not plaintext output.
+- stores return code, timeout state, duration, output byte counts, and output hashes, not plaintext output;
+- supports operator-defined redaction of sensitive argv positions in returned and persisted metadata, without changing the actual arguments passed to the executable.
 
 It is not an OS sandbox. The executable runs with the permissions of the host account. Operators should configure only narrowly scoped, known executables and should not register general-purpose shells, interpreters with untrusted arguments, package managers, or destructive commands.
 
@@ -73,7 +74,7 @@ Path resolution and file identity checks reduce common path and symlink mistakes
 
 ### JUnit report adapter
 
-The JUnit adapter accepts relative report paths beneath a `FilePolicy` allowlist. It requires a matching `command_result` record from the trusted CommandAdapter, verifies that the command's fixed argument vector names this exact `--junitxml` output path, and checks that the report modification time falls between command start and completion. It reads at most the configured file limit, checks file identity before and after the read, and stores no raw XML.
+The JUnit adapter accepts relative report paths beneath a `FilePolicy` allowlist. It requires a matching `command_result` record from the trusted CommandAdapter, verifies that the command's fixed argument vector names this exact `--junitxml` output path, and checks that the report modification time falls between command start and completion. It reads at most the configured file limit, checks file identity before and after the read, requires UTF-8 input, rejects DTD/entity declarations, and stores no raw XML.
 
 It:
 
