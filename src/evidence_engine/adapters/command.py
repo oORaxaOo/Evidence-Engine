@@ -55,6 +55,7 @@ class CommandSpec:
     timeout_seconds: float = 30.0
     max_output_bytes: int = 256 * 1024
     environment: tuple[tuple[str, str], ...] = ()
+    redacted_argument_indexes: tuple[int, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.command_id, str) or not _COMMAND_ID.fullmatch(self.command_id):
@@ -119,6 +120,24 @@ class CommandSpec:
                 raise ValueError("environment contains an invalid or duplicate entry")
             seen.add(key)
         object.__setattr__(self, "environment", environment)
+
+        redacted_indexes = tuple(self.redacted_argument_indexes)
+        if (
+            any(
+                isinstance(index, bool)
+                or not isinstance(index, int)
+                or index < 0
+                or index >= len(argv)
+                for index in redacted_indexes
+            )
+            or len(set(redacted_indexes)) != len(redacted_indexes)
+        ):
+            raise ValueError("redacted_argument_indexes must contain unique valid argv indexes")
+        object.__setattr__(
+            self,
+            "redacted_argument_indexes",
+            tuple(sorted(redacted_indexes)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +229,11 @@ class CommandAdapter:
 
         request_id = uuid.uuid4().hex
         source = f"evidence_engine.command_adapter:{command_id}"
+        redacted_indexes = set(spec.redacted_argument_indexes)
+        evidence_argv = tuple(
+            "<redacted>" if index in redacted_indexes else value
+            for index, value in enumerate(spec.argv)
+        )
         engine.record_evidence(
             task_id,
             kind="command_request",
@@ -217,7 +241,7 @@ class CommandAdapter:
             payload={
                 "request_id": request_id,
                 "command_id": spec.command_id,
-                "argv": list(spec.argv),
+                "argv": list(evidence_argv),
                 "cwd": str(spec.cwd),
                 "timeout_seconds": spec.timeout_seconds,
                 "max_output_bytes": spec.max_output_bytes,
@@ -318,7 +342,7 @@ class CommandAdapter:
         payload = {
             "request_id": request_id,
             "command_id": spec.command_id,
-            "argv": list(spec.argv),
+            "argv": list(evidence_argv),
             "cwd": str(spec.cwd),
             "started_at": started_at,
             "finished_at": finished_at,
@@ -344,7 +368,7 @@ class CommandAdapter:
         return CommandExecution(
             request_id=request_id,
             command_id=spec.command_id,
-            argv=spec.argv,
+            argv=evidence_argv,
             cwd=str(spec.cwd),
             started_at=started_at,
             finished_at=finished_at,
