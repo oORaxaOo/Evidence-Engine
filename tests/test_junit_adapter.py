@@ -1,9 +1,12 @@
-import sys
+import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
+import sys
+import time
 
-from evidence_engine import Criterion, EvidenceEngine, EvidenceReader, TaskStatus
+from evidence_engine import Criterion, EvidenceEngine, TaskStatus
 from evidence_engine.adapters import (
     CommandAdapter,
     CommandSpec,
@@ -12,28 +15,24 @@ from evidence_engine.adapters import (
 )
 
 
-VALID_XML = """<?xml version='1.0' encoding='utf-8'?>
-<testsuites>
-  <testsuite name='sample' tests='2' failures='0' errors='0' skipped='0'>
-    <testcase classname='sample' name='one'/>
-    <testcase classname='sample' name='two'/>
-  </testsuite>
-</testsuites>
-"""
+COMMAND_SOURCE = "evidence_engine.command_adapter:pytest"
+REPORT_SOURCE = "evidence_engine.junit_report_adapter"
 
-FAILED_XML = """<testsuites>
-  <testsuite name='sample' tests='2' failures='1' errors='0' skipped='0'>
-    <testcase classname='sample' name='one'/>
-    <testcase classname='sample' name='two'><failure message='assertion failed'>details</failure></testcase>
-  </testsuite>
-</testsuites>
+
+def successful_report():
+    return """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="unit" tests="3" failures="0" errors="0" skipped="1">
+  <testcase classname="sample" name="passes"/>
+  <testcase classname="sample" name="also-passes"/>
+  <testcase classname="sample" name="is-skipped"><skipped/></testcase>
+</testsuite>
 """
 
 
 class JUnitReportAdapterTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name) / "allowed"
+        self.root = Path(self.temp_dir.name) / "reports"
         self.root.mkdir()
         self.engine = EvidenceEngine(Path(self.temp_dir.name) / "evidence.sqlite3")
         self.policy = FilePolicy(allowed_roots=(self.root,))
@@ -42,212 +41,291 @@ class JUnitReportAdapterTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def make_running_task(self, *, expected_failures=0):
+    def make_running_task(self):
         task = self.engine.create_task(
-            "JUnit report verification",
+            "Validate JUnit test report",
             [
-                Criterion(
-                    kind="command_result",
-                    field="return_code",
-                    operator="eq",
-                    expected=0,
-                    source="evidence_engine.command_adapter:pytest",
-                ),
-                Criterion(
-                    kind="junit_report",
-                    field="parse_status",
-                    operator="eq",
-                    expected="valid",
-                    source="evidence_engine.junit_adapter",
-                ),
-                Criterion(
-                    kind="junit_report",
-                    field="tests_failed",
-                    operator="eq",
-                    expected=expected_failures,
-                    source="evidence_engine.junit_adapter",
-                ),
+                Criterion("command_result", "process_started", "eq", True, COMMAND_SOURCE),
+                Criterion("command_result", "timed_out", "eq", False, COMMAND_SOURCE),
+                Criterion("command_result", "return_code", "eq", 0, COMMAND_SOURCE),
+                Criterion("junit_report", "report_valid", "eq", True, REPORT_SOURCE),
+                Criterion("junit_report", "metadata_consistent", "eq", True, REPORT_SOURCE),
+                Criterion("junit_report", "tests", "gte", 1, REPORT_SOURCE),
+                Criterion("junit_report", "failures", "eq", 0, REPORT_SOURCE),
+                Criterion("junit_report", "errors", "eq", 0, REPORT_SOURCE),
             ],
         )
         self.engine.start_task(task.task_id)
         return task.task_id
 
-    def run_registered_report_command(self, task_id, xml_text, *, report_arg="report.xml", write=True):
-        target = (self.root / report_arg).resolve()
+    def run_report_command(self, task_id, xml_text=None, name="junit.xml", *, write=True, exit_code=0):
+        target = (self.root / name).resolve()
         if write:
+            # The command receives a fixed --junitxml path from CommandSpec.
+            # Bytes are hex-encoded for the synthetic process argument so the
+            # UTF-16 security test exercises the actual file bytes.
+            if isinstance(xml_text, bytes):
+                write_expression = (
+                    "Path(sys.argv[1].split('=', 1)[1]).write_bytes(bytes.fromhex(sys.argv[2]))"
+                )
+                content_argument = xml_text.hex()
+            else:
+                write_expression = (
+                    "Path(sys.argv[1].split('=', 1)[1]).write_text(sys.argv[2], encoding='utf-8')"
+                )
+                content_argument = xml_text or ""
             code = (
                 "from pathlib import Path; import sys; "
-                "Path(sys.argv[1].split('=', 1)[1]).write_text(sys.argv[2], encoding='utf-8')"
+                + write_expression
+                + "; raise SystemExit(int(sys.argv[3]))"
             )
-            argv = (
-                sys.executable,
-                "-c",
-                code,
-                f"--junitxml={target}",
-                xml_text,
-            )
+            args = (code, f"--junitxml={target}", content_argument, str(exit_code))
         else:
-            argv = (
-                sys.executable,
-                "-c",
-                "pass",
-                f"--junitxml={target}",
-            )
+            code = "pass"
+            args = (code, f"--junitxml={target}")
+
         spec = CommandSpec(
             command_id="pytest",
-            argv=argv,
+            argv=(sys.executable, "-c", *args),
             cwd=self.root,
             max_output_bytes=4096,
         )
         return CommandAdapter([spec]).run(self.engine, task_id, "pytest")
 
-    def test_valid_report_is_bound_to_the_command_and_counts_are_verified(self):
-        task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, VALID_XML)
-
-        report = self.adapter.inspect(
+    def inspect(self, task_id, command, path="junit.xml", adapter=None):
+        return (adapter or self.adapter).inspect(
             self.engine,
             task_id,
-            "report.xml",
+            path,
             command_evidence_id=command.evidence_id,
         )
 
-        self.assertEqual(report.parse_status, "valid")
-        self.assertEqual(report.tests_total, 2)
-        self.assertEqual(report.tests_passed, 2)
-        self.assertEqual(report.tests_failed, 0)
-        self.assertEqual(report.tests_errors, 0)
-        self.assertTrue(report.stable_read)
-        self.assertNotEqual(report.report_sha256, "")
+    def test_valid_report_recomputes_counts_and_can_pass_task(self):
+        xml = successful_report()
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, xml)
+
+        result = self.inspect(task_id, command)
+
+        self.assertTrue(result.available)
+        self.assertTrue(result.report_valid)
+        self.assertTrue(result.metadata_consistent)
+        self.assertEqual(result.tests, 3)
+        self.assertEqual(result.passed, 2)
+        self.assertEqual(result.failures, 0)
+        self.assertEqual(result.errors, 0)
+        self.assertEqual(result.skipped, 1)
+        self.assertEqual(result.sha256, hashlib.sha256(xml.encode("utf-8")).hexdigest())
+        self.assertEqual(result.command_evidence_id, command.evidence_id)
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.PASSED)
 
-        # The assistant-facing reader can inspect the final result but has no
-        # evidence-writing or task-finalization methods.
-        reader = EvidenceReader(self.engine.db_path)
-        read_task = reader.get_task(task_id)
-        evidence = reader.list_evidence(task_id)
-        verification = reader.get_latest_verification(task_id)
-        self.assertEqual(read_task.status, TaskStatus.PASSED)
-        self.assertEqual(evidence[-1]["kind"], "junit_report")
-        self.assertEqual(verification["status"], "supported")
-        self.assertEqual(verification["evidence_sequence"], evidence[-1]["sequence"])
-        self.assertTrue(reader.verify_integrity())
+    def test_report_counts_are_recomputed_instead_of_trusting_summary_attributes(self):
+        xml = successful_report().replace('tests="3"', 'tests="300"')
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, xml)
 
-    def test_failed_testcase_is_counted_and_fails_the_declared_contract(self):
-        task_id = self.make_running_task(expected_failures=0)
-        command = self.run_registered_report_command(task_id, FAILED_XML)
+        result = self.inspect(task_id, command)
 
-        report = self.adapter.inspect(
-            self.engine,
-            task_id,
-            "report.xml",
-            command_evidence_id=command.evidence_id,
-        )
-
-        self.assertEqual(report.parse_status, "valid")
-        self.assertEqual(report.tests_total, 2)
-        self.assertEqual(report.tests_failed, 1)
+        self.assertEqual(result.tests, 3)
+        self.assertFalse(result.metadata_consistent)
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
+
+    def test_failure_and_error_testcases_are_counted_separately(self):
+        xml = """<testsuite tests="3" failures="1" errors="1" skipped="0">
+          <testcase name="ok"/>
+          <testcase name="failed"><failure message="assertion failed"/></testcase>
+          <testcase name="error"><error message="uncaught exception"/></testcase>
+        </testsuite>"""
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, xml)
+
+        result = self.inspect(task_id, command)
+
+        self.assertEqual(result.tests, 3)
+        self.assertEqual(result.passed, 1)
+        self.assertEqual(result.failures, 1)
+        self.assertEqual(result.errors, 1)
+        self.assertEqual(result.skipped, 0)
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
+
+    def test_nested_suites_and_xml_namespaces_are_supported(self):
+        xml = """<testsuites xmlns="urn:junit">
+          <testsuite name="first" tests="2" failures="1" errors="0" skipped="0">
+            <testcase name="ok"/>
+            <testcase name="bad"><failure/></testcase>
+          </testsuite>
+        </testsuites>"""
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, xml)
+
+        result = self.inspect(task_id, command)
+
+        self.assertEqual(result.tests, 2)
+        self.assertEqual(result.failures, 1)
+        self.assertTrue(result.report_valid)
 
     def test_malformed_xml_is_recorded_as_invalid_and_cannot_pass(self):
         task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, "<testsuites><broken>")
+        command = self.run_report_command(task_id, "<testsuite><testcase></testsuite>")
 
-        report = self.adapter.inspect(
-            self.engine,
-            task_id,
-            "report.xml",
-            command_evidence_id=command.evidence_id,
-        )
+        result = self.inspect(task_id, command)
 
-        self.assertEqual(report.parse_status, "invalid")
-        self.assertIsNotNone(report.inspection_error)
+        self.assertTrue(result.available)
+        self.assertFalse(result.report_valid)
+        self.assertIsNotNone(result.inspection_error)
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
 
     def test_doctype_and_entity_declarations_are_rejected(self):
-        xml_text = """<!DOCTYPE testsuites [<!ENTITY x 'expanded'>]>
-        <testsuites><testsuite><testcase name='&x;'/></testsuite></testsuites>"""
+        xml = """<!DOCTYPE testsuite [<!ENTITY x "expanded">]>
+        <testsuite tests="1"><testcase name="&x;"/></testsuite>"""
         task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, xml_text)
+        command = self.run_report_command(task_id, xml)
 
-        report = self.adapter.inspect(
-            self.engine,
-            task_id,
-            "report.xml",
-            command_evidence_id=command.evidence_id,
+        result = self.inspect(task_id, command)
+
+        self.assertFalse(result.report_valid)
+        self.assertIn("DOCTYPE", result.inspection_error)
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
+
+    def test_utf16_dtd_and_entity_documents_are_rejected_with_or_without_bom(self):
+        xml_text = """<!DOCTYPE testsuite [<!ENTITY x "expanded">]>
+        <testsuite tests="1"><testcase name="&x;"/></testsuite>"""
+        encodings = (
+            xml_text.encode("utf-16"),
+            xml_text.encode("utf-16-be"),
+            xml_text.encode("utf-16-le"),
         )
 
-        self.assertEqual(report.parse_status, "invalid")
-        self.assertIn("DTD", report.inspection_error or "")
+        for index, xml_bytes in enumerate(encodings):
+            with self.subTest(encoding=index):
+                task_id = self.make_running_task()
+                report_name = f"junit-{index}.xml"
+                command = self.run_report_command(
+                    task_id, xml_bytes, name=report_name
+                )
+
+                result = self.inspect(task_id, command, path=report_name)
+
+                self.assertFalse(result.report_valid)
+                self.assertIn("UTF-8", result.inspection_error or "")
+                self.assertEqual(
+                    self.engine.finalize_task(task_id).status,
+                    TaskStatus.FAILED,
+                )
+
+    def test_missing_report_is_inconclusive_not_a_pass_or_failure(self):
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, write=False)
+
+        result = self.inspect(task_id, command)
+
+        self.assertFalse(result.available)
+        self.assertIsNone(result.report_valid)
+        evidence = self.engine.list_evidence(task_id)
+        self.assertTrue(any(item["kind"] == "junit_report_attempt" for item in evidence))
+        self.assertFalse(any(item["kind"] == "junit_report" for item in evidence))
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
+
+    def test_report_over_size_limit_is_inconclusive_and_not_parsed(self):
+        task_id = self.make_running_task()
+        xml = "<testsuite>" + (" " * 2048) + "</testsuite>"
+        command = self.run_report_command(task_id, xml)
+        policy = FilePolicy(allowed_roots=(self.root,), max_file_size_bytes=1024)
+        adapter = JUnitReportAdapter(policy)
+
+        result = self.inspect(task_id, command, adapter=adapter)
+
+        self.assertFalse(result.available)
+        self.assertIsNone(result.report_valid)
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
+
+    def test_parent_traversal_is_rejected_before_report_evidence_is_written(self):
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, write=False)
+
+        with self.assertRaises(ValueError):
+            self.inspect(task_id, command, path="../outside.xml")
+
+        evidence = self.engine.list_evidence(task_id)
+        self.assertFalse(any(item["kind"] == "junit_report" for item in evidence))
+
+    def test_symlink_outside_allowed_root_is_rejected(self):
+        outside = Path(self.temp_dir.name) / "outside.xml"
+        outside.write_text(successful_report(), encoding="utf-8")
+        link = self.root / "outside.xml"
+        try:
+            os.symlink(outside, link)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks are unavailable on this platform")
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, write=False, name="outside.xml")
+
+        with self.assertRaises(PermissionError):
+            self.inspect(task_id, command, path="outside.xml")
+
+        evidence = self.engine.list_evidence(task_id)
+        self.assertFalse(any(item["kind"] == "junit_report" for item in evidence))
+
+    def test_report_must_match_the_command_declared_output_path(self):
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, successful_report(), name="other.xml")
+
+        with self.assertRaises(ValueError):
+            self.inspect(task_id, command, path="junit.xml")
+
+    def test_missing_or_untrusted_command_evidence_is_rejected(self):
+        task_id = self.make_running_task()
+
+        with self.assertRaises(ValueError):
+            self.adapter.inspect(
+                self.engine,
+                task_id,
+                "junit.xml",
+                command_evidence_id="missing-evidence-id",
+            )
 
     def test_stale_report_created_before_command_is_inconclusive(self):
-        (self.root / "report.xml").write_text(VALID_XML, encoding="utf-8")
+        (self.root / "junit.xml").write_text(successful_report(), encoding="utf-8")
         task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, "", write=False)
+        command = self.run_report_command(task_id, write=False)
 
-        report = self.adapter.inspect(
-            self.engine,
-            task_id,
-            "report.xml",
-            command_evidence_id=command.evidence_id,
-        )
+        result = self.inspect(task_id, command)
 
-        self.assertEqual(report.parse_status, "inconclusive")
-        self.assertIn("predates", report.inspection_error or "")
+        self.assertFalse(result.available)
+        self.assertIsNone(result.report_valid)
+        self.assertIn("predates", result.inspection_error or "")
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
 
-    def test_report_modified_after_command_exit_is_inconclusive(self):
-        import time
-
+    def test_report_modified_after_command_completion_is_inconclusive(self):
         task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, "", write=False)
-        time.sleep(0.02)
-        (self.root / "report.xml").write_text(VALID_XML, encoding="utf-8")
+        command = self.run_report_command(task_id, write=False)
+        report_path = self.root / "junit.xml"
+        report_path.write_text(successful_report(), encoding="utf-8")
+        future_timestamp = time.time() + 60
+        os.utime(report_path, (future_timestamp, future_timestamp))
 
-        report = self.adapter.inspect(
-            self.engine,
-            task_id,
-            "report.xml",
-            command_evidence_id=command.evidence_id,
-        )
+        result = self.inspect(task_id, command)
 
-        self.assertEqual(report.parse_status, "inconclusive")
-        self.assertIn("after command", report.inspection_error or "")
+        self.assertFalse(result.available)
+        self.assertIsNone(result.report_valid)
+        self.assertIn("after the command completed", result.inspection_error or "")
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
 
-    def test_report_path_must_match_the_registered_command_argument(self):
+    def test_evidence_contains_digest_and_summary_but_never_raw_xml(self):
+        xml = successful_report()
         task_id = self.make_running_task()
-        command = self.run_registered_report_command(
-            task_id, VALID_XML, report_arg="other.xml"
-        )
+        command = self.run_report_command(task_id, xml)
 
-        with self.assertRaises(ValueError):
-            self.adapter.inspect(
-                self.engine,
-                task_id,
-                "report.xml",
-                command_evidence_id=command.evidence_id,
-            )
+        self.inspect(task_id, command)
 
-    def test_missing_command_evidence_is_rejected(self):
-        task_id = self.make_running_task()
-        with self.assertRaises(ValueError):
-            self.adapter.inspect(
-                self.engine,
-                task_id,
-                "report.xml",
-                command_evidence_id="not-a-record",
-            )
-
-    def test_report_cannot_be_inspected_outside_the_allowlisted_root(self):
-        task_id = self.make_running_task()
-        command = self.run_registered_report_command(task_id, VALID_XML)
-
-        with self.assertRaises(ValueError):
-            self.adapter.inspect(
-                self.engine,
-                task_id,
-                "../outside.xml",
-                command_evidence_id=command.evidence_id,
-            )
+        evidence = self.engine.list_evidence(task_id)
+        report = next(item for item in evidence if item["kind"] == "junit_report")
+        payload = report["payload"]
+        self.assertEqual(payload["sha256"], hashlib.sha256(xml.encode("utf-8")).hexdigest())
+        self.assertEqual(payload["command_evidence_id"], command.evidence_id)
+        self.assertFalse(payload["content_stored"])
+        self.assertNotIn("xml", payload)
+        self.assertNotIn(xml, str(payload))
 
 
 if __name__ == "__main__":
