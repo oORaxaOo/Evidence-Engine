@@ -11,11 +11,12 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
 class TaskStatus(StrEnum):
@@ -89,6 +90,20 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _normalize_timestamp(value: str | None) -> str:
+    if value is None:
+        return _now()
+    if not isinstance(value, str):
+        raise ValueError("observed_at must be an ISO-8601 string with a timezone")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("observed_at must be a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("observed_at must include a timezone offset")
+    return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
 def _canonical_json(value: Any) -> str:
     try:
         return json.dumps(
@@ -122,8 +137,21 @@ class EvidenceEngine:
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
+    @contextmanager
+    def _db(self) -> Iterator[sqlite3.Connection]:
+        """Open, commit or roll back, and always close one database connection."""
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._connect() as db:
+        with self._db() as db:
             db.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -198,7 +226,7 @@ class EvidenceEngine:
         task_id = uuid.uuid4().hex
         created_at = _now()
         criteria_json = _canonical_json([item.to_dict() for item in criteria_tuple])
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,title,status,criteria_json,created_at) VALUES(?,?,?,?,?)",
                 (task_id, title.strip(), TaskStatus.PLANNED.value, criteria_json, created_at),
@@ -206,7 +234,7 @@ class EvidenceEngine:
         return self.get_task(task_id)
 
     def get_task(self, task_id: str) -> Task:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         if row is None:
             raise KeyError(f"unknown task: {task_id}")
@@ -221,7 +249,7 @@ class EvidenceEngine:
         )
 
     def start_task(self, task_id: str) -> Task:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT status FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if row is None:
                 raise KeyError(f"unknown task: {task_id}")
@@ -247,9 +275,9 @@ class EvidenceEngine:
         if not isinstance(payload, dict):
             raise TypeError("payload must be a JSON object")
         payload_json = _canonical_json(payload)
-        observed_at = observed_at or _now()
+        observed_at = _normalize_timestamp(observed_at)
 
-        with self._connect() as db:
+        with self._db() as db:
             task = db.execute("SELECT status FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if task is None:
                 raise KeyError(f"unknown task: {task_id}")
@@ -283,7 +311,7 @@ class EvidenceEngine:
         return evidence_id
 
     def list_evidence(self, task_id: str) -> tuple[dict[str, Any], ...]:
-        with self._connect() as db:
+        with self._db() as db:
             rows = db.execute(
                 "SELECT * FROM evidence WHERE task_id=? ORDER BY sequence",
                 (task_id,),
@@ -300,7 +328,7 @@ class EvidenceEngine:
         )
 
     def verify_integrity(self) -> bool:
-        with self._connect() as db:
+        with self._db() as db:
             rows = db.execute("SELECT * FROM evidence ORDER BY sequence").fetchall()
         previous_hash = self.GENESIS_HASH
         for row in rows:
@@ -401,7 +429,7 @@ class EvidenceEngine:
                 for check in checks
             ],
         })
-        with self._connect() as db:
+        with self._db() as db:
             db.execute(
                 "INSERT INTO verifications(verification_id,task_id,status,report_json,verified_at) VALUES(?,?,?,?,?)",
                 (uuid.uuid4().hex, task_id, overall.value, report_json, report.verified_at),
@@ -419,6 +447,6 @@ class EvidenceEngine:
             status = TaskStatus.FAILED
         else:
             status = TaskStatus.UNKNOWN
-        with self._connect() as db:
+        with self._db() as db:
             db.execute("UPDATE tasks SET status=? WHERE task_id=?", (status.value, task_id))
         return self.get_task(task_id)
