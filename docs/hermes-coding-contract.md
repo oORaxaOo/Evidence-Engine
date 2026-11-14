@@ -6,7 +6,7 @@ Evidence Engine is used only for software-development work: creating or changing
 
 Hermes must route a task into this workflow only when the task is explicitly classified as coding/build work. Ordinary conversation, research, fact-finding, planning, reminders, appointments, and other future assistant capabilities are outside this workflow. They may receive separate control systems later.
 
-The current implementation is a host-side Python orchestration primitive. It is not yet a live Hermes tool registration, WhatsApp integration, sandbox, or general task router. This repository does not change Hermes or WhatsApp configuration.
+The repository also contains an opt-in native Hermes Agent v0.23.1 plugin. It connects the host-side verifier to Hermes' documented coding-only pre_verify and transform_llm_output hooks. It does not change Hermes core, WhatsApp pairing, or gateway configuration automatically. See [Hermes v0.23.1 integration](hermes-v0231-integration.md) for installation and host-policy setup.
 
 ## Authority boundaries
 
