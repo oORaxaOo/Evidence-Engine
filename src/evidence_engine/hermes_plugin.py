@@ -152,6 +152,8 @@ def _project_policy(
 
     if len(junit_paths) != 1:
         raise PolicyError("each project must define exactly one JUnit-backed test command")
+    if sum(spec.timeout_seconds for spec in specs) > 480:
+        raise PolicyError("combined command timeout budget must not exceed 480 seconds")
     return root, tuple(specs), junit_paths
 
 
@@ -313,6 +315,19 @@ def register(ctx: Any) -> None:
                 "max_attempts": max_attempts,
             }
             return None
+
+        previous_state = pending_by_session.get(key)
+        pending_by_session[key] = {
+            "released": False,
+            "reason": "verification is still running or did not complete",
+            "task_id": (
+                previous_state.get("task_id")
+                if isinstance(previous_state, dict)
+                else "pending"
+            ),
+            "attempts": attempt + 1,
+            "max_attempts": max_attempts,
+        }
 
         try:
             from agent.runtime_cwd import resolve_agent_cwd
