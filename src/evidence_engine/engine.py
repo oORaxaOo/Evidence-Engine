@@ -138,10 +138,12 @@ class EvidenceEngine:
         return connection
 
     @contextmanager
-    def _db(self) -> Iterator[sqlite3.Connection]:
+    def _db(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
         """Open, commit or roll back, and always close one database connection."""
         connection = self._connect()
         try:
+            if immediate:
+                connection.execute("BEGIN IMMEDIATE")
             yield connection
             connection.commit()
         except BaseException:
@@ -196,26 +198,29 @@ class EvidenceEngine:
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'passed'
-                        AND EXISTS (
-                            SELECT 1 FROM verifications
-                            WHERE task_id = OLD.task_id AND status = 'supported'
-                        )
+                        AND (
+                            SELECT status FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ) = 'supported'
                     )
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'failed'
-                        AND EXISTS (
-                            SELECT 1 FROM verifications
-                            WHERE task_id = OLD.task_id AND status IN ('contradicted', 'invalid')
-                        )
+                        AND (
+                            SELECT status FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ) IN ('contradicted', 'invalid')
                     )
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'unknown'
-                        AND EXISTS (
-                            SELECT 1 FROM verifications
-                            WHERE task_id = OLD.task_id AND status = 'inconclusive'
-                        )
+                        AND (
+                            SELECT status FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ) = 'inconclusive'
                     )
                 )
                 BEGIN
@@ -311,7 +316,8 @@ class EvidenceEngine:
         payload_json = _canonical_json(payload)
         observed_at = _normalize_timestamp(observed_at)
 
-        with self._db() as db:
+        # Serialize the read-next-hash + insert pair to keep one linear hash chain.
+        with self._db(immediate=True) as db:
             task = db.execute("SELECT status FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             if task is None:
                 raise KeyError(f"unknown task: {task_id}")
