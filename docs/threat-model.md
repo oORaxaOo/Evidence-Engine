@@ -21,6 +21,7 @@
 | Evidence payload is modified | Hash-chain verification detects changes within the retained chain |
 | Model attempts arbitrary command execution | Command callers select only an operator-registered command ID; argv is fixed and no shell is invoked |
 | Command runs indefinitely or produces unlimited output | Command adapter applies time and output limits, then records timeout/limit state |
+| Secrets appear in command evidence metadata | Operators can mask selected argv indexes; actual command arguments remain unchanged but stored/returned metadata uses `<redacted>` |
 | File adapter reads outside its configured roots | Relative-path policy rejects parent traversal and escaped symlinks |
 | Large or inconsistent test report claims success | JUnit adapter bounds input size and recomputes testcase counts instead of trusting summary attributes |\n| Old or replaced XML is presented as a fresh test result | JUnit adapter requires a matching CommandAdapter record, exact output path, and file modification time inside the command's start/completion interval |
 | XML entity expansion / DTD payload | JUnit adapter rejects DTD and ENTITY declarations before parsing |
@@ -32,6 +33,7 @@
 - **False or compromised adapter:** the engine can verify that a submitted structured result matches a criterion; it cannot independently know whether a compromised adapter lied about an outside event.
 - **Spoofed source labels:** the `source` field is descriptive metadata, not an identity credential.
 - **Host compromise:** a compromised host can alter code, policies, clocks, processes, and evidence before they reach the ledger.
+- **Redaction configuration:** masking is opt-in and index-based. Operators must identify every sensitive argument position; a missed index can persist a secret in evidence. Do not mask parameters that a provenance verifier needs to inspect.
 - **Command authority:** allowlisting is not a sandbox. A registered executable runs with the host account's permissions. A poorly chosen fixed command/argument vector can still change files, access networks, or perform destructive actions. Register only narrowly scoped commands and use a dedicated low-privilege account.
 - **Process descendants:** process-group termination is a best-effort containment measure, not a universal OS isolation guarantee across platforms.
 - **Filesystem races:** path resolution and before/after file identity checks reduce common symlink and concurrent-write problems. They do not provide kernel-enforced confinement against a privileged or hostile process that can mutate parent directories at the same time. Use OS permissions and platform-specific descriptor-relative APIs for hostile environments.
