@@ -19,7 +19,8 @@ The project is intended to support assistants such as Lilith/Hermes without depe
 - Missing or insufficient evidence remains inconclusive; it never becomes success.
 - A host-side command adapter executes only operator-registered fixed argument vectors, without a shell, with timeouts and bounded output capture.
 - A file adapter inspects only paths beneath operator-configured roots and stores metadata and hashes, not file contents.
-- A JUnit XML adapter recomputes testcase outcomes, checks declared suite totals, rejects DTD/entity declarations, and stores only a structured summary and digest.
+- A JUnit XML adapter recomputes testcase outcomes, checks declared suite totals, rejects unsafe XML encodings and DTD/entity declarations, and stores only a structured summary and digest.
+- A read-only EvidenceReader opens SQLite in read-only mode, returns bounded evidence pages and consistent task reports, checks the evidence hash chain, and refuses to present stale or inconsistent verification as effective success.
 - Python 3.11+; no third-party runtime dependencies.
 
 ## What it does not claim
@@ -131,9 +132,27 @@ The report adapter reads a bounded UTF-8 XML file from an allowlisted root. It r
 
 **Security boundary:** do not expose unrestricted `record_evidence`, adapter construction, or arbitrary command-policy creation as LLM tools. The model should receive read-only task and verification reports.
 
+
+### Read-only assistant view
+
+The LLM-facing side should receive an `EvidenceReader`, never the writer or unrestricted adapter objects.
+
+```python
+from evidence_engine import EvidenceReader
+
+reader = EvidenceReader("evidence.sqlite3")
+report = reader.get_task_report(task_id)
+
+print(report["effective_status"])
+print(report["verification_current"])
+print(report["ledger_integrity"])
+```
+
+The returned report is a read-only snapshot of the task, current evidence, and newest verification. Evidence is paginated (maximum 500 records per page). If a verification is stale, inconsistent with its stored report, or the evidence chain is invalid, a terminal success is downgraded to `unknown` in `effective_status`. The original stored task status remains visible separately in `report["task"]["status"]`.
+
 ## Development status
 
-The core ledger and host-side command, file, and JUnit report adapters are under active development. The Hermes bridge, read-only report API, external checkpointing, and broader isolation controls remain future work. Nothing in this repository automatically changes Hermes, WhatsApp, or Genesis configuration.
+The core ledger, host-side command/file/JUnit adapters, and read-only EvidenceReader facade are implemented on the development branch. A Hermes bridge, external signed checkpoints, and broader process/filesystem isolation remain future work. Nothing in this repository automatically changes Hermes, WhatsApp, or Genesis configuration.
 
 See:
 - [Architecture](docs/architecture.md)
