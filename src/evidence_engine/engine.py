@@ -188,6 +188,20 @@ class EvidenceEngine:
                     SELECT RAISE(ABORT, 'task criteria are immutable');
                 END;
 
+                CREATE TRIGGER IF NOT EXISTS task_status_transition_guard
+                BEFORE UPDATE OF status ON tasks
+                WHEN NOT (
+                    (OLD.status = 'planned' AND NEW.status = 'running')
+                    OR (OLD.status = 'unknown' AND NEW.status = 'running')
+                    OR (
+                        OLD.status = 'running'
+                        AND NEW.status IN ('passed', 'failed', 'unknown')
+                    )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'invalid task status transition');
+                END;
+
                 CREATE TRIGGER IF NOT EXISTS evidence_no_update
                 BEFORE UPDATE ON evidence
                 BEGIN
