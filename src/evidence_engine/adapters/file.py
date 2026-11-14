@@ -62,20 +62,30 @@ class FilePolicy:
         """Resolve a relative target and reject traversal or escaped symlinks."""
         if not isinstance(relative_path, str) or not relative_path.strip():
             raise ValueError("relative_path must be a non-empty string")
-        if "\\x00" in relative_path or "\\\\" in relative_path:
+        if chr(0) in relative_path or chr(92) in relative_path:
             raise ValueError("relative_path contains an invalid character")
         candidate_path = Path(relative_path)
         if candidate_path.is_absolute() or ".." in candidate_path.parts:
             raise ValueError("absolute paths and parent traversal are not allowed")
 
+        first_missing: tuple[Path, Path] | None = None
         for root in self.allowed_roots:
             candidate = root / candidate_path
             try:
                 resolved = candidate.resolve(strict=False)
             except OSError:
                 continue
-            if resolved.is_relative_to(root):
+            if not resolved.is_relative_to(root):
+                if candidate.exists() or candidate.is_symlink():
+                    raise PermissionError("requested path resolves outside an allowed root")
+                continue
+            if resolved.exists():
                 return root, resolved
+            if first_missing is None:
+                first_missing = (root, resolved)
+
+        if first_missing is not None:
+            return first_missing
         raise PermissionError("requested path is outside all allowed roots")
 
 
