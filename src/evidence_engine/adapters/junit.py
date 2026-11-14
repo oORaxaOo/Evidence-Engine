@@ -327,6 +327,9 @@ class JUnitReportAdapter:
             raise ValueError("commands exceeding the output limit cannot establish report provenance")
 
         command_started = _parse_timestamp(command_payload.get("started_at"))
+        command_finished = _parse_timestamp(command_payload.get("finished_at"))
+        if command_finished < command_started:
+            raise ValueError("command evidence has an invalid execution time interval")
         expected_report_path = _command_report_path(
             command_payload.get("argv"),
             command_payload.get("cwd"),
@@ -435,10 +438,15 @@ class JUnitReportAdapter:
             after.st_mtime_ns / 1_000_000_000,
             tz=timezone.utc,
         )
-        if report_modified < command_started:
+        if report_modified < command_started or report_modified > command_finished:
+            reason = (
+                "report predates the command execution"
+                if report_modified < command_started
+                else "report was modified after the command completed"
+            )
             return self._record_attempt(
                 engine, task_id, relative_path, command_evidence_id,
-                reason="report predates the command execution",
+                reason=reason,
                 size_bytes=len(data),
                 sha256=digest,
                 stable_read=True,
