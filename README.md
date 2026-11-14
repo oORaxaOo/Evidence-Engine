@@ -24,7 +24,7 @@ This project is being developed as a reliability layer for assistants such as Li
 
 Evidence Engine is **not** a truth machine and does not prove that arbitrary natural-language statements are true. It checks structured observations against criteria that a trusted host has defined in advance.
 
-A hash chain is tamper-evident, not tamper-proof. Someone with direct database and filesystem control can rewrite the entire database and recompute the chain. Stronger deployments should anchor checkpoints outside the database and protect write access.
+A hash chain is tamper-evident, not tamper-proof. Someone with direct database and filesystem control can rewrite the entire database and recompute the chain. Without an external checkpoint, deleting the tail of the chain also cannot be detected. Stronger deployments should anchor checkpoints outside the database and protect write access.
 
 A `source` label is metadata, not cryptographic authentication. The future Hermes adapter must accept evidence only from trusted host-side adapters, never from free-form model output.
 
