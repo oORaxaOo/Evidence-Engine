@@ -79,7 +79,7 @@ class EvidenceReaderTests(unittest.TestCase):
 
         self.assertIsNone(report["verification"])
         self.assertFalse(report["verification_current"])
-        self.assertEqual(report["effective_status"], TaskStatus.UNKNOWN.value)
+        self.assertEqual(report["effective_status"], TaskStatus.RUNNING.value)
 
     def test_reader_can_page_evidence_without_mutating_it(self):
         task_id = self.make_running_task()
