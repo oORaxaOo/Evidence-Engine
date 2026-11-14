@@ -198,29 +198,29 @@ class EvidenceEngine:
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'passed'
-                        AND (
+                        AND COALESCE((
                             SELECT status FROM verifications
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
-                        ) = 'supported'
+                        ), '') = 'supported'
                     )
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'failed'
-                        AND (
+                        AND COALESCE((
                             SELECT status FROM verifications
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
-                        ) IN ('contradicted', 'invalid')
+                        ), '') IN ('contradicted', 'invalid')
                     )
                     OR (
                         OLD.status = 'running'
                         AND NEW.status = 'unknown'
-                        AND (
+                        AND COALESCE((
                             SELECT status FROM verifications
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
-                        ) = 'inconclusive'
+                        ), '') = 'inconclusive'
                     )
                 )
                 BEGIN
