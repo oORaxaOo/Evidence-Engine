@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -47,6 +48,26 @@ class EvidenceEngineTests(unittest.TestCase):
             self.engine.record_evidence(
                 task.task_id, kind="x", source="test", payload={"ok": True},
             )
+
+    def test_task_cannot_be_marked_passed_directly_from_planned(self):
+        task = self.engine.create_task("Unverified task", [Criterion("x", "ok")])
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task.task_id,),
+                )
+        self.assertEqual(self.engine.get_task(task.task_id).status, TaskStatus.PLANNED)
+
+    def test_success_criteria_are_immutable(self):
+        task = self.engine.create_task("Fixed contract", [Criterion("x", "ok")])
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET criteria_json='[]' WHERE task_id=?",
+                    (task.task_id,),
+                )
+        self.assertEqual(len(self.engine.get_task(task.task_id).criteria), 1)
 
     def test_ledger_detects_payload_tampering(self):
         task_id = self.make_running_task()
