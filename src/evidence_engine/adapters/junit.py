@@ -53,6 +53,16 @@ def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1].lower()
 
 
+def _validate_xml_security(data: bytes) -> None:
+    """Require UTF-8 and reject DTD/entity declarations before XML parsing."""
+    try:
+        decoded = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("JUnit XML must use UTF-8 encoding") from exc
+    if _DTD_OR_ENTITY.search(decoded):
+        raise ValueError("DOCTYPE and ENTITY declarations are not allowed")
+
+
 def _parse_timestamp(value: object) -> datetime:
     if not isinstance(value, str):
         raise ValueError("command evidence has no valid timestamp")
@@ -453,15 +463,8 @@ class JUnitReportAdapter:
                 stable_read=True,
             )
 
-        if _DTD_OR_ENTITY.search(data):
-            return self._record_parsed(
-                engine, task_id, relative_path, command_evidence_id, command_payload,
-                data=data, digest=digest, valid=False, totals=None,
-                metadata_consistent=False, declared_counts=None,
-                error="DOCTYPE and ENTITY declarations are not allowed",
-            )
-
         try:
+            _validate_xml_security(data)
             document = ET.fromstring(data)
             root_name = _local_name(document.tag)
             if root_name not in {"testsuite", "testsuites"}:
