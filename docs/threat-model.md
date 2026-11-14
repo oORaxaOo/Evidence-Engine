@@ -27,6 +27,7 @@
 | XML entity expansion / DTD payload | JUnit adapter rejects DTD and ENTITY declarations before parsing |
 | Raw report content leaks into the evidence ledger | File and JUnit adapters store metadata and digests, not file contents |
 | Assistant mutates or rewrites evidence through its read interface | EvidenceReader uses SQLite read-only mode and exposes no mutating methods |
+| Assistant requests arbitrary database or host operations through the bridge | JSON-RPC bridge uses a fixed read-only method allowlist, validates parameters, bounds request size, and hides internal errors |
 | Stale or internally inconsistent verification is repeated as success | EvidenceReader checks the evidence snapshot and duplicated verification fields; effective status becomes unknown when the checks fail |
 
 ## Out of scope / residual risks
@@ -40,6 +41,7 @@
 - **Process descendants:** process-group termination is a best-effort containment measure, not a universal OS isolation guarantee across platforms.
 - **Filesystem races:** path resolution and before/after file identity checks reduce common symlink and concurrent-write problems. They do not provide kernel-enforced confinement against a privileged or hostile process that can mutate parent directories at the same time. Use OS permissions and platform-specific descriptor-relative APIs for hostile environments.
 - **JUnit dialect differences:** test reporting systems may use vendor-specific XML elements or semantics. Unknown tags are not inferred as failures; adapters should be extended and tested for each nonstandard dialect before relying on the result. Filesystems with coarse or unreliable modification timestamps may conservatively produce an inconclusive result. Timestamp checks are provenance signals, not cryptographic proof of file origin.
+- **Bridge process authorization:** the JSON-RPC bridge has no caller authentication. Anyone able to connect to the process stdin can invoke its allowed read methods. Keep it attached to a trusted parent process and restrict database/file permissions.
 - **Read authorization:** read-only does not mean public. A host bridge must still restrict which task IDs and evidence payloads a given assistant or user may read.
 - **Verification record authenticity:** the read-only facade checks duplicated verification fields for internal consistency, but verification rows do not yet have independent signatures or an external hash anchor. A privileged database attacker can rewrite them.
 - **Natural-language truth:** the engine does not establish factual truth of arbitrary text, summaries, or news analysis.
