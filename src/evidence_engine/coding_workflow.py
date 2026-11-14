@@ -201,7 +201,7 @@ class CodingVerificationGate:
                             or not isinstance(minimum, int)
                             or minimum < 1
                             or not isinstance(check_ids, list)
-                            or len(check_ids) < minimum
+                            or len(set(check_ids)) < minimum
                             or any(
                                 not isinstance(item, str) or item not in evidence_ids
                                 for item in check_ids
