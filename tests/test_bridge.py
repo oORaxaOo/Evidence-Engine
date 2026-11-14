@@ -116,7 +116,7 @@ class EvidenceBridgeTests(unittest.TestCase):
             json.dumps(self.request("get_task", {"task_id": self.task_id})),
             json.dumps(self.request("verify_integrity", request_id=2)),
         ]
-        source = io.BytesIO(("\\n".join(requests) + "\\n").encode("utf-8"))
+        source = io.BytesIO(("\n".join(requests) + "\n").encode("utf-8"))
         destination = io.BytesIO()
 
         serve_stdio(
@@ -137,7 +137,7 @@ class EvidenceBridgeTests(unittest.TestCase):
     def test_stdio_transport_rejects_oversized_line_and_continues(self):
         oversized = json.dumps(self.request("verify_integrity")).ljust(2048, " ")
         valid = json.dumps(self.request("verify_integrity", request_id=2))
-        source = io.BytesIO((oversized + "\\n" + valid + "\\n").encode("utf-8"))
+        source = io.BytesIO((oversized + "\n" + valid + "\n").encode("utf-8"))
         destination = io.BytesIO()
 
         serve_stdio(
