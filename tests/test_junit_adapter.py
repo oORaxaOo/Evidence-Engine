@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evidence_engine import Criterion, EvidenceEngine, TaskStatus
+from evidence_engine import Criterion, EvidenceEngine, EvidenceReader, TaskStatus
 from evidence_engine.adapters import (
     CommandAdapter,
     CommandSpec,
@@ -120,6 +120,18 @@ class JUnitReportAdapterTests(unittest.TestCase):
         self.assertTrue(report.stable_read)
         self.assertNotEqual(report.report_sha256, "")
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.PASSED)
+
+        # The assistant-facing reader can inspect the final result but has no
+        # evidence-writing or task-finalization methods.
+        reader = EvidenceReader(self.engine.db_path)
+        read_task = reader.get_task(task_id)
+        evidence = reader.list_evidence(task_id)
+        verification = reader.get_latest_verification(task_id)
+        self.assertEqual(read_task.status, TaskStatus.PASSED)
+        self.assertEqual(evidence[-1]["kind"], "junit_report")
+        self.assertEqual(verification["status"], "supported")
+        self.assertEqual(verification["evidence_sequence"], evidence[-1]["sequence"])
+        self.assertTrue(reader.verify_integrity())
 
     def test_failed_testcase_is_counted_and_fails_the_declared_contract(self):
         task_id = self.make_running_task(expected_failures=0)
