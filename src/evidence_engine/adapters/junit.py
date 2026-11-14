@@ -1,4 +1,10 @@
-"""Structured JUnit XML report verification bound to a completed command record."""
+"""Bounded JUnit XML inspection tied to an actual allowlisted test command.
+
+The adapter never treats a standalone XML file as proof of a test run. It
+requires a command_result recorded by the trusted CommandAdapter, checks that
+the command declared this exact JUnit output path, and rejects stale report
+files. It stores only a structured summary and digest, never raw XML.
+"""
 
 from __future__ import annotations
 
@@ -10,16 +16,53 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from ..engine import EvidenceEngine, TaskStatus
-from .file import FilePolicy, _stat_identity
+from .file import FilePolicy
 
 
-_SOURCE = "evidence_engine.junit_adapter"
+_SOURCE = "evidence_engine.junit_report_adapter"
+_COMMAND_SOURCE_PREFIX = "evidence_engine.command_adapter:"
+_DTD_OR_ENTITY = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
+_COUNT_FIELDS = ("tests", "failures", "errors", "skipped")
+
+
+@dataclass(frozen=True, slots=True)
+class JUnitReportResult:
+    """Summary of one JUnit report inspection."""
+
+    relative_path: str
+    available: bool
+    report_valid: bool | None
+    metadata_consistent: bool | None
+    tests: int | None
+    passed: int | None
+    failures: int | None
+    errors: int | None
+    skipped: int | None
+    size_bytes: int | None
+    sha256: str | None
+    stable_read: bool | None
+    inspection_error: str | None
+    command_evidence_id: str
+    evidence_id: str
 
 
 def _local_name(tag: str) -> str:
-    return tag.rsplit("}", 1)[-1]
+    return tag.rsplit("}", 1)[-1].lower()
+
+
+def _validate_xml_security(data: bytes) -> None:
+    """Require UTF-8 and reject DTD/entity declarations before XML parsing."""
+    try:
+        decoded = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("JUnit XML must use UTF-8 encoding") from exc
+    if "\x00" in decoded:
+        raise ValueError("JUnit XML must use UTF-8 encoding")
+    if _DTD_OR_ENTITY.search(decoded):
+        raise ValueError("DOCTYPE and ENTITY declarations are not allowed")
 
 
 def _parse_timestamp(value: object) -> datetime:
@@ -34,62 +77,222 @@ def _parse_timestamp(value: object) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-@dataclass(frozen=True, slots=True)
-class JUnitReportSnapshot:
-    relative_path: str
-    resolved_path: str
-    command_evidence_id: str
-    report_sha256: str | None
-    parse_status: str
-    tests_total: int | None
-    tests_passed: int | None
-    tests_failed: int | None
-    tests_errors: int | None
-    tests_skipped: int | None
-    stable_read: bool | None
-    inspection_error: str | None
-    evidence_id: str
+def _command_report_path(argv: object, cwd: object) -> Path:
+    """Resolve the single fixed --junitxml output path in command evidence."""
+    if not isinstance(argv, list) or not argv or not all(isinstance(item, str) for item in argv):
+        raise ValueError("command evidence has no valid argument vector")
+    if not isinstance(cwd, str) or not cwd:
+        raise ValueError("command evidence has no valid working directory")
+
+    command_cwd = Path(cwd).expanduser()
+    if not command_cwd.is_absolute():
+        raise ValueError("command evidence working directory must be absolute")
+
+    targets: list[str] = []
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        if argument.startswith("--junitxml="):
+            targets.append(argument.split("=", 1)[1])
+        elif argument == "--junitxml":
+            if index + 1 >= len(argv):
+                raise ValueError("--junitxml option has no output path")
+            index += 1
+            targets.append(argv[index])
+        index += 1
+
+    if len(targets) != 1 or not targets[0]:
+        raise ValueError("command must declare exactly one --junitxml output path")
+
+    target = Path(targets[0]).expanduser()
+    if not target.is_absolute():
+        target = command_cwd / target
+    return target.resolve(strict=False)
+
+
+def _declared_counts(element: ET.Element) -> dict[str, int]:
+    declared: dict[str, int] = {}
+    for field in _COUNT_FIELDS:
+        raw = element.attrib.get(field)
+        if raw is None:
+            continue
+        try:
+            value = int(raw, 10)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"JUnit {field} attribute is not an integer") from exc
+        if value < 0:
+            raise ValueError(f"JUnit {field} attribute must not be negative")
+        declared[field] = value
+    return declared
+
+
+def _count_testcases(root: ET.Element) -> dict[str, int]:
+    totals = {"tests": 0, "passed": 0, "failures": 0, "errors": 0, "skipped": 0}
+    for testcase in root.iter():
+        if _local_name(testcase.tag) != "testcase":
+            continue
+        totals["tests"] += 1
+        outcomes = {_local_name(child.tag) for child in list(testcase)}
+        if "error" in outcomes:
+            totals["errors"] += 1
+        elif "failure" in outcomes:
+            totals["failures"] += 1
+        elif "skipped" in outcomes:
+            totals["skipped"] += 1
+        else:
+            totals["passed"] += 1
+    return totals
+
+
+def _metadata_is_consistent(
+    root: ET.Element,
+    totals: dict[str, int],
+) -> tuple[bool, dict[str, Any]]:
+    """Compare declared root and suite counts with recomputed testcase counts."""
+    suite_elements = [
+        element for element in root.iter()
+        if _local_name(element.tag) == "testsuite"
+    ]
+    declared_summaries: list[dict[str, int]] = []
+    consistent = True
+
+    for suite in suite_elements:
+        declared = _declared_counts(suite)
+        if not declared:
+            continue
+        suite_totals = _count_testcases(suite)
+        declared_summaries.append(declared)
+        for field, value in declared.items():
+            if suite_totals[field] != value:
+                consistent = False
+
+    if _local_name(root.tag) == "testsuites":
+        root_declared = _declared_counts(root)
+        if root_declared:
+            declared_summaries.append(root_declared)
+            for field, value in root_declared.items():
+                if totals[field] != value:
+                    consistent = False
+
+    return consistent, {"suites": declared_summaries}
 
 
 class JUnitReportAdapter:
-    """Parse bounded JUnit XML only when tied to an actual command evidence record.
-
-    A valid XML document alone is not accepted as proof of a test run. The
-    command evidence must identify the same --junitxml output path, and the
-    report file must have been modified no earlier than that command started.
-    """
+    """Inspect JUnit XML only when linked to trusted command execution evidence."""
 
     def __init__(self, policy: FilePolicy):
         if not isinstance(policy, FilePolicy):
             raise TypeError("policy must be a FilePolicy")
         self.policy = policy
+        self.max_report_bytes = policy.max_file_size_bytes
 
-    @staticmethod
-    def _junit_output_path(argv: object, cwd: object) -> Path:
-        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
-            raise ValueError("command evidence has no valid argv")
-        if not isinstance(cwd, str) or not cwd:
-            raise ValueError("command evidence has no valid working directory")
+    def _record_attempt(
+        self,
+        engine: EvidenceEngine,
+        task_id: str,
+        relative_path: str,
+        command_evidence_id: str,
+        *,
+        reason: str,
+        size_bytes: int | None = None,
+        sha256: str | None = None,
+        stable_read: bool | None = None,
+    ) -> JUnitReportResult:
+        evidence_id = engine.record_evidence(
+            task_id,
+            kind="junit_report_attempt",
+            source=_SOURCE,
+            payload={
+                "relative_path": relative_path,
+                "command_evidence_id": command_evidence_id,
+                "available": False,
+                "reason": reason,
+                "size_bytes": size_bytes,
+                "sha256": sha256,
+                "stable_read": stable_read,
+                "content_stored": False,
+            },
+        )
+        return JUnitReportResult(
+            relative_path=relative_path,
+            available=False,
+            report_valid=None,
+            metadata_consistent=None,
+            tests=None,
+            passed=None,
+            failures=None,
+            errors=None,
+            skipped=None,
+            size_bytes=size_bytes,
+            sha256=sha256,
+            stable_read=stable_read,
+            inspection_error=reason,
+            command_evidence_id=command_evidence_id,
+            evidence_id=evidence_id,
+        )
 
-        targets: list[str] = []
-        index = 0
-        while index < len(argv):
-            argument = argv[index]
-            if argument.startswith("--junitxml="):
-                targets.append(argument.split("=", 1)[1])
-            elif argument == "--junitxml":
-                if index + 1 >= len(argv):
-                    raise ValueError("--junitxml option has no output path")
-                index += 1
-                targets.append(argv[index])
-            index += 1
-
-        if len(targets) != 1 or not targets[0]:
-            raise ValueError("registered command must contain exactly one --junitxml output path")
-        target = Path(targets[0]).expanduser()
-        if not target.is_absolute():
-            target = Path(cwd) / target
-        return target.resolve(strict=False)
+    def _record_parsed(
+        self,
+        engine: EvidenceEngine,
+        task_id: str,
+        relative_path: str,
+        command_evidence_id: str,
+        command_payload: dict[str, Any],
+        *,
+        data: bytes,
+        digest: str,
+        valid: bool,
+        totals: dict[str, int] | None,
+        metadata_consistent: bool | None,
+        declared_counts: dict[str, Any] | None,
+        error: str | None,
+    ) -> JUnitReportResult:
+        payload = {
+            "relative_path": relative_path,
+            "command_evidence_id": command_evidence_id,
+            "command_request_id": command_payload.get("request_id"),
+            "command_id": command_payload.get("command_id"),
+            "command_return_code": command_payload.get("return_code"),
+            "command_started_at": command_payload.get("started_at"),
+            "command_finished_at": command_payload.get("finished_at"),
+            "report_valid": valid,
+            "metadata_consistent": metadata_consistent,
+            "parse_status": "valid" if valid else "invalid",
+            "tests": totals["tests"] if totals else None,
+            "passed": totals["passed"] if totals else None,
+            "failures": totals["failures"] if totals else None,
+            "errors": totals["errors"] if totals else None,
+            "skipped": totals["skipped"] if totals else None,
+            "declared_counts": declared_counts,
+            "size_bytes": len(data),
+            "sha256": digest,
+            "stable_read": True,
+            "inspection_error": error,
+            "content_stored": False,
+        }
+        evidence_id = engine.record_evidence(
+            task_id,
+            kind="junit_report",
+            source=_SOURCE,
+            payload=payload,
+        )
+        return JUnitReportResult(
+            relative_path=relative_path,
+            available=True,
+            report_valid=valid,
+            metadata_consistent=metadata_consistent,
+            tests=totals["tests"] if totals else None,
+            passed=totals["passed"] if totals else None,
+            failures=totals["failures"] if totals else None,
+            errors=totals["errors"] if totals else None,
+            skipped=totals["skipped"] if totals else None,
+            size_bytes=len(data),
+            sha256=digest,
+            stable_read=True,
+            inspection_error=error,
+            command_evidence_id=command_evidence_id,
+            evidence_id=evidence_id,
+        )
 
     def inspect(
         self,
@@ -98,7 +301,16 @@ class JUnitReportAdapter:
         relative_path: str,
         *,
         command_evidence_id: str,
-    ) -> JUnitReportSnapshot:
+    ) -> JUnitReportResult:
+        """Inspect a bounded report belonging to one recorded command execution.
+
+        The command evidence must come from CommandAdapter, must have started,
+        must not have timed out or exceeded the output cap, and must declare
+        the exact report path being inspected. A stale or missing report is
+        recorded as an attempt only, leaving report criteria inconclusive.
+        """
+        if not isinstance(engine, EvidenceEngine):
+            raise TypeError("engine must be an EvidenceEngine")
         task = engine.get_task(task_id)
         if task.status is not TaskStatus.RUNNING:
             raise ValueError("JUnit reports can only be inspected for a running task")
@@ -107,201 +319,171 @@ class JUnitReportAdapter:
 
         command_record = next(
             (
-                item
-                for item in engine.list_evidence(task_id)
+                item for item in engine.list_evidence(task_id)
                 if item["evidence_id"] == command_evidence_id
                 and item["kind"] == "command_result"
+                and item["source"].startswith(_COMMAND_SOURCE_PREFIX)
             ),
             None,
         )
         if command_record is None:
-            raise ValueError("command_evidence_id does not identify a command result for this task")
+            raise ValueError(
+                "command_evidence_id must identify trusted CommandAdapter evidence for this task"
+            )
 
-        command = command_record["payload"]
-        if command.get("process_started") is not True or command.get("timed_out") is True:
-            raise ValueError("command did not complete as a started, non-timeout process")
-        if command.get("output_limit_exceeded") is True:
-            raise ValueError("command output limit was exceeded; report provenance is inconclusive")
-        return_code = command.get("return_code")
-        if isinstance(return_code, bool) or not isinstance(return_code, int):
-            raise ValueError("command evidence has no final process exit code")
+        command_payload = command_record["payload"]
+        if command_payload.get("process_started") is not True:
+            raise ValueError("the recorded command did not start")
+        if command_payload.get("timed_out") is True:
+            raise ValueError("timed-out commands cannot establish report provenance")
+        if command_payload.get("output_limit_exceeded") is True:
+            raise ValueError("commands exceeding the output limit cannot establish report provenance")
 
-        command_started = _parse_timestamp(command.get("started_at"))
-        command_finished = _parse_timestamp(command.get("finished_at"))
+        command_started = _parse_timestamp(command_payload.get("started_at"))
+        command_finished = _parse_timestamp(command_payload.get("finished_at"))
         if command_finished < command_started:
-            raise ValueError("command evidence has an invalid execution time range")
-        expected_output_path = self._junit_output_path(command.get("argv"), command.get("cwd"))
-        root, resolved = self.policy.resolve(relative_path)
-        if expected_output_path != resolved:
-            raise ValueError("report path does not match the command's registered --junitxml output path")
-
-        parse_status = "inconclusive"
-        report_hash: str | None = None
-        tests_total: int | None = None
-        tests_passed: int | None = None
-        tests_failed: int | None = None
-        tests_errors: int | None = None
-        tests_skipped: int | None = None
-        stable_read: bool | None = None
-        inspection_error: str | None = None
-
-        if not resolved.exists():
-            inspection_error = "JUnit report file does not exist"
-        else:
-            try:
-                before_path = resolved.stat()
-                if not stat.S_ISREG(before_path.st_mode):
-                    inspection_error = "JUnit report path is not a regular file"
-                elif before_path.st_size > self.policy.max_file_size_bytes:
-                    stable_read = False
-                    inspection_error = "JUnit report exceeds configured file size limit"
-                else:
-                    with resolved.open("rb") as handle:
-                        before_fd = os.fstat(handle.fileno())
-                        content = handle.read(self.policy.max_file_size_bytes + 1)
-                        after_fd = os.fstat(handle.fileno())
-
-                    after_path = resolved.stat()
-                    stable_read = (
-                        _stat_identity(before_path) == _stat_identity(before_fd)
-                        and _stat_identity(before_fd) == _stat_identity(after_fd)
-                        and _stat_identity(after_fd) == _stat_identity(after_path)
-                        and len(content) == after_fd.st_size
-                        and len(content) <= self.policy.max_file_size_bytes
-                        and resolved.is_relative_to(root)
-                    )
-                    if not stable_read:
-                        inspection_error = "JUnit report changed during inspection or exceeded its size limit"
-                    else:
-                        report_hash = hashlib.sha256(content).hexdigest()
-                        modified_at = datetime.fromtimestamp(
-                            before_path.st_mtime_ns / 1_000_000_000,
-                            tz=timezone.utc,
-                        )
-                        if modified_at < command_started:
-                            stable_read = False
-                            inspection_error = "JUnit report predates the command execution"
-                        elif modified_at > command_finished:
-                            stable_read = False
-                            inspection_error = "JUnit report was modified after command completion"
-                        elif re.search(rb"<!\s*(?:DOCTYPE|ENTITY)\b", content, re.IGNORECASE):
-                            parse_status = "invalid"
-                            inspection_error = "DTD/entity declarations are not allowed in JUnit reports"
-                        else:
-                            try:
-                                document = ET.fromstring(content)
-                            except ET.ParseError as exc:
-                                parse_status = "invalid"
-                                inspection_error = f"invalid JUnit XML: {exc}"
-                            else:
-                                root_name = _local_name(document.tag)
-                                if root_name not in {"testsuite", "testsuites"}:
-                                    parse_status = "invalid"
-                                    inspection_error = "XML root is not testsuite or testsuites"
-                                else:
-                                    testcases = [
-                                        element
-                                        for element in document.iter()
-                                        if _local_name(element.tag) == "testcase"
-                                    ]
-                                    if not testcases:
-                                        parse_status = "inconclusive"
-                                        inspection_error = "JUnit report contains no test cases"
-                                    else:
-                                        total = len(testcases)
-                                        failures = 0
-                                        errors = 0
-                                        skipped = 0
-                                        passed = 0
-                                        for testcase in testcases:
-                                            child_names = {
-                                                _local_name(element.tag)
-                                                for element in testcase.iter()
-                                                if element is not testcase
-                                            }
-                                            has_failure = "failure" in child_names
-                                            has_error = "error" in child_names
-                                            has_skipped = "skipped" in child_names
-                                            failures += int(has_failure)
-                                            errors += int(has_error)
-                                            skipped += int(has_skipped)
-                                            passed += int(not (has_failure or has_error or has_skipped))
-
-                                        declared_counts = {
-                                            "tests": total,
-                                            "failures": failures,
-                                            "errors": errors,
-                                            "skipped": skipped,
-                                        }
-                                        mismatches = []
-                                        for field, actual in declared_counts.items():
-                                            declared = document.attrib.get(field)
-                                            if declared is not None:
-                                                try:
-                                                    declared_value = int(declared)
-                                                except ValueError:
-                                                    mismatches.append(field)
-                                                else:
-                                                    if declared_value != actual:
-                                                        mismatches.append(field)
-
-                                        tests_total = total
-                                        tests_passed = passed
-                                        tests_failed = failures
-                                        tests_errors = errors
-                                        tests_skipped = skipped
-                                        if mismatches:
-                                            parse_status = "invalid"
-                                            inspection_error = (
-                                                "JUnit root counts disagree with parsed test cases: "
-                                                + ", ".join(mismatches)
-                                            )
-                                        else:
-                                            parse_status = "valid"
-            except FileNotFoundError:
-                inspection_error = "JUnit report disappeared during inspection"
-                stable_read = False
-            except OSError as exc:
-                inspection_error = f"{type(exc).__name__}: {exc}"
-                stable_read = False
-
-        payload = {
-            "relative_path": relative_path,
-            "resolved_path": str(resolved),
-            "root": str(root),
-            "command_evidence_id": command_evidence_id,
-            "command_request_id": command.get("request_id"),
-            "command_return_code": command.get("return_code"),
-            "command_started_at": command.get("started_at"),
-            "report_sha256": report_hash,
-            "parse_status": parse_status,
-            "tests_total": tests_total,
-            "tests_passed": tests_passed,
-            "tests_failed": tests_failed,
-            "tests_errors": tests_errors,
-            "tests_skipped": tests_skipped,
-            "stable_read": stable_read,
-            "inspection_error": inspection_error,
-            "report_content_stored": False,
-        }
-        evidence_id = engine.record_evidence(
-            task_id,
-            kind="junit_report",
-            source=_SOURCE,
-            payload=payload,
+            raise ValueError("command evidence has an invalid execution time interval")
+        expected_report_path = _command_report_path(
+            command_payload.get("argv"),
+            command_payload.get("cwd"),
         )
-        return JUnitReportSnapshot(
-            relative_path=relative_path,
-            resolved_path=str(resolved),
-            command_evidence_id=command_evidence_id,
-            report_sha256=report_hash,
-            parse_status=parse_status,
-            tests_total=tests_total,
-            tests_passed=tests_passed,
-            tests_failed=tests_failed,
-            tests_errors=tests_errors,
-            tests_skipped=tests_skipped,
-            stable_read=stable_read,
-            inspection_error=inspection_error,
-            evidence_id=evidence_id,
+        root, resolved = self.policy.resolve(relative_path)
+        if expected_report_path != resolved:
+            raise ValueError("report path does not match the command's --junitxml output path")
+
+        if command_payload.get("return_code") is None:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="command has no final return code",
+            )
+
+        try:
+            path_stat = resolved.stat()
+        except FileNotFoundError:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report file does not exist",
+            )
+        except OSError as exc:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+
+        if not stat.S_ISREG(path_stat.st_mode):
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report path is not a regular file",
+            )
+        if path_stat.st_size > self.max_report_bytes:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report exceeds configured size limit",
+                size_bytes=path_stat.st_size,
+                stable_read=False,
+            )
+
+        flags = os.O_RDONLY
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+
+        try:
+            descriptor = os.open(str(resolved), flags)
+            with os.fdopen(descriptor, "rb") as handle:
+                before = os.fstat(handle.fileno())
+                if not stat.S_ISREG(before.st_mode):
+                    return self._record_attempt(
+                        engine, task_id, relative_path, command_evidence_id,
+                        reason="opened report is not a regular file",
+                    )
+                if before.st_size > self.max_report_bytes:
+                    return self._record_attempt(
+                        engine, task_id, relative_path, command_evidence_id,
+                        reason="report exceeds configured size limit",
+                        size_bytes=before.st_size,
+                        stable_read=False,
+                    )
+                data = handle.read(self.max_report_bytes + 1)
+                after = os.fstat(handle.fileno())
+            after_path = resolved.stat()
+        except FileNotFoundError:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report disappeared while opening",
+                stable_read=False,
+            )
+        except OSError as exc:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason=f"{type(exc).__name__}: {exc}",
+                stable_read=False,
+            )
+
+        if len(data) > self.max_report_bytes:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report exceeds configured size limit",
+                size_bytes=len(data),
+                stable_read=False,
+            )
+
+        identity = lambda item: (
+            item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns, item.st_ctime_ns
+        )
+        stable = (
+            identity(before) == identity(after)
+            and identity(after) == identity(after_path)
+            and len(data) == after.st_size
+            and resolved.is_relative_to(root)
+        )
+        if not stable:
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason="report changed during inspection",
+                size_bytes=len(data),
+                stable_read=False,
+            )
+
+        digest = hashlib.sha256(data).hexdigest()
+        report_modified = datetime.fromtimestamp(
+            after.st_mtime_ns / 1_000_000_000,
+            tz=timezone.utc,
+        )
+        if report_modified < command_started or report_modified > command_finished:
+            reason = (
+                "report predates the command execution"
+                if report_modified < command_started
+                else "report was modified after the command completed"
+            )
+            return self._record_attempt(
+                engine, task_id, relative_path, command_evidence_id,
+                reason=reason,
+                size_bytes=len(data),
+                sha256=digest,
+                stable_read=True,
+            )
+
+        try:
+            _validate_xml_security(data)
+            document = ET.fromstring(data)
+            root_name = _local_name(document.tag)
+            if root_name not in {"testsuite", "testsuites"}:
+                raise ValueError("XML root must be <testsuite> or <testsuites>")
+            totals = _count_testcases(document)
+            metadata_consistent, declared = _metadata_is_consistent(document, totals)
+        except (ET.ParseError, ValueError) as exc:
+            return self._record_parsed(
+                engine, task_id, relative_path, command_evidence_id, command_payload,
+                data=data, digest=digest, valid=False, totals=None,
+                metadata_consistent=False, declared_counts=None,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
+        return self._record_parsed(
+            engine, task_id, relative_path, command_evidence_id, command_payload,
+            data=data, digest=digest, valid=True, totals=totals,
+            metadata_consistent=metadata_consistent,
+            declared_counts=declared, error=None,
         )
