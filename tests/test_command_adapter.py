@@ -49,7 +49,7 @@ class CommandAdapterTests(unittest.TestCase):
         self.assertEqual(result.return_code, 0)
         self.assertFalse(result.timed_out)
         self.assertFalse(result.output_limit_exceeded)
-        self.assertEqual(result.stdout_bytes, len(b"evidence-ok\\n"))
+        self.assertEqual(result.stdout_bytes, len(b"evidence-ok\n"))
         self.assertNotEqual(result.stdout_sha256, "")
         evidence = self.engine.list_evidence(task_id)
         recorded = [item for item in evidence if item["kind"] == "command_result"]
@@ -99,7 +99,7 @@ class CommandAdapterTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             adapter.run(self.engine, task_id, "not-registered")
 
-        self.assertEqual(self.engine.list_evidence(task_id), [])
+        self.assertEqual(self.engine.list_evidence(task_id), ())
 
     def test_command_requires_running_task(self):
         task = self.engine.create_task(
@@ -115,6 +115,33 @@ class CommandAdapterTests(unittest.TestCase):
             CommandSpec(
                 command_id="unsafe",
                 argv=("python", "-c", "print('no')"),
+                cwd=Path(self.temp_dir.name),
+            )
+
+    def test_command_spec_rejects_nul_argument(self):
+        with self.assertRaises(ValueError):
+            CommandSpec(
+                command_id="unsafe",
+                argv=(sys.executable, "-c", "print('safe')"+chr(0)),
+                cwd=Path(self.temp_dir.name),
+            )
+
+    def test_command_spec_rejects_nul_environment_value(self):
+        with self.assertRaises(ValueError):
+            CommandSpec(
+                command_id="unsafe",
+                argv=(sys.executable, "-c", "print('safe')"),
+                cwd=Path(self.temp_dir.name),
+                environment=(("SAFE_TEST_VALUE", "bad"+chr(0)),),
+            )
+
+    def test_command_spec_rejects_explicit_shell_executable(self):
+        if not Path("/bin/sh").exists():
+            self.skipTest("POSIX shell is not present on this platform")
+        with self.assertRaises(ValueError):
+            CommandSpec(
+                command_id="shell",
+                argv=("/bin/sh", "-c", "true"),
                 cwd=Path(self.temp_dir.name),
             )
 
