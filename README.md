@@ -82,13 +82,14 @@ print(final_task.status)  # passed only if recorded evidence supports the criter
 
 ## Development status
 
-The adapters, read-only stdio bridge, and bounded coding workflow are host-side components. The coding workflow is not yet wired into Hermes; it is not a global control for conversations, research, or other assistant tasks. OS sandboxing and external signed checkpoints are not implemented. No WhatsApp or Hermes configuration is changed by this repository.
+The adapters, read-only stdio bridge, bounded coding workflow, and a native Hermes Agent v0.23.1 plugin are host-side components. The plugin uses Hermes' coding-only pre-verification hook and a final-output gate; it is opt-in and does not alter Hermes core, WhatsApp pairing, or gateway configuration automatically. It requires an operator-owned project command policy. OS sandboxing and external signed checkpoints are not implemented.
 
 See:
 - [Architecture](docs/architecture.md)
 - [Adapters](docs/adapters.md)
 - [Threat model](docs/threat-model.md)
 - [Hermes coding integration contract](docs/hermes-coding-contract.md)
+- [Hermes Agent v0.23.1 plugin integration](docs/hermes-v0231-integration.md)
 
 ## License
 
