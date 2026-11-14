@@ -2,6 +2,7 @@
 
 from .command import CommandAdapter, CommandExecution, CommandSpec
 from .file import FileAdapter, FilePolicy, FileSnapshot
+from .junit import JUnitReportAdapter, JUnitReportSnapshot
 
 __all__ = [
     "CommandAdapter",
@@ -10,4 +11,6 @@ __all__ = [
     "FileAdapter",
     "FilePolicy",
     "FileSnapshot",
+    "JUnitReportAdapter",
+    "JUnitReportSnapshot",
 ]
