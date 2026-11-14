@@ -69,6 +69,27 @@ class EvidenceEngineTests(unittest.TestCase):
                 )
         self.assertEqual(self.engine.get_task(task_id).status, TaskStatus.RUNNING)
 
+    def test_terminal_state_requires_the_latest_verification(self):
+        task_id = self.make_running_task()
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 0},
+        )
+        self.engine.verify_task(task_id)
+        with self.engine._db() as db:
+            db.execute(
+                """INSERT INTO verifications(
+                    verification_id,task_id,status,report_json,verified_at
+                ) VALUES(?,?,?,?,?)""",
+                ("later-inconclusive", task_id, "inconclusive", "{}", "2026-11-14T20:00:00+00:00"),
+            )
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task_id,),
+                )
+
     def test_success_criteria_are_immutable(self):
         task = self.engine.create_task("Fixed contract", [Criterion("x", "ok")])
         with self.engine._db() as db:
