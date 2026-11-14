@@ -13,7 +13,7 @@ The plugin registers no model-callable Evidence Engine writer, database, or comm
 
 Hermes v0.23.1's transform_llm_output supports hold_stream=True. This is required so an unverified coding completion cannot be shown before the final gate rewrites it.
 
-Hermes applies that hold to all final replies in the profile while the plugin is enabled. Non-coding replies pass through unchanged, and Evidence Engine is not invoked for them, but streaming is held until the final response. Enable this plugin only in the Hermes profile used for Lilith if that is the intended scope.
+Hermes applies that hold to all final replies in the profile while the plugin is enabled. Non-coding replies pass through unchanged, and Evidence Engine is not invoked for them, but streaming is held until the final response. Enable this plugin only in the Hermes profile used for Lilith if that is the intended scope. Hermes uses the first non-empty transform result; avoid another plugin that rewrites final responses ahead of this gate, or it may take precedence.
 
 ## Install after this pull request is merged
 
@@ -34,9 +34,9 @@ Merge these keys into the existing ~/.hermes/config.yaml; do not replace the who
       max_verify_nudges: 5
 
     plugins:
-      hook_callback_timeout: 300
+      hook_callback_timeout: 600
 
-Keep any existing keys under agent: and plugins:. The callback timeout is raised because a project test suite may take longer than Hermes' default hook timeout.
+Keep any existing keys under agent: and plugins:. The callback timeout is raised because project checks may take longer than Hermes' default. The plugin caps the combined configured command timeout budget at 480 seconds, leaving time for evidence recording and finalization.
 
 ## Configure the host-owned project policy
 
@@ -98,5 +98,5 @@ Optional environment variables (set in the Hermes gateway environment or ~/.herm
 - This is a final-state coding gate, not a universal proof that software is bug-free.
 - The initial report adapter is JUnit XML. Projects using other test-report formats need a suitable adapter before they can be approved.
 - The host command policy is an operator trust boundary, not an OS sandbox. Approved commands run with the gateway user's permissions.
-- The plugin uses in-memory per-session state for the active turn. It does not yet provide workflow recovery across a gateway crash.
+- The plugin writes a pending state before running checks, so a timed-out pre_verify callback cannot silently release the original answer. It uses in-memory per-session state for the active turn and does not yet provide workflow recovery across a gateway crash.
 - The plugin does not modify Hermes core, WhatsApp pairing, or the gateway configuration automatically. Installation and configuration are explicit operator actions.
