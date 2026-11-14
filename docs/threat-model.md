@@ -22,7 +22,7 @@
 | Model attempts arbitrary command execution | Command callers select only an operator-registered command ID; argv is fixed and no shell is invoked |
 | Command runs indefinitely or produces unlimited output | Command adapter applies time and output limits, then records timeout/limit state |
 | File adapter reads outside its configured roots | Relative-path policy rejects parent traversal and escaped symlinks |
-| Large or inconsistent test report claims success | JUnit adapter bounds input size and recomputes testcase counts instead of trusting summary attributes |
+| Large or inconsistent test report claims success | JUnit adapter bounds input size and recomputes testcase counts instead of trusting summary attributes |\n| Old or replaced XML is presented as a fresh test result | JUnit adapter requires a matching CommandAdapter record, exact output path, and file modification time inside the command's start/completion interval |
 | XML entity expansion / DTD payload | JUnit adapter rejects DTD and ENTITY declarations before parsing |
 | Raw report content leaks into the evidence ledger | File and JUnit adapters store metadata and digests, not file contents |
 
@@ -35,7 +35,7 @@
 - **Command authority:** allowlisting is not a sandbox. A registered executable runs with the host account's permissions. A poorly chosen fixed command/argument vector can still change files, access networks, or perform destructive actions. Register only narrowly scoped commands and use a dedicated low-privilege account.
 - **Process descendants:** process-group termination is a best-effort containment measure, not a universal OS isolation guarantee across platforms.
 - **Filesystem races:** path resolution and before/after file identity checks reduce common symlink and concurrent-write problems. They do not provide kernel-enforced confinement against a privileged or hostile process that can mutate parent directories at the same time. Use OS permissions and platform-specific descriptor-relative APIs for hostile environments.
-- **JUnit dialect differences:** test reporting systems may use vendor-specific XML elements or semantics. Unknown tags are not inferred as failures; adapters should be extended and tested for each nonstandard dialect before relying on the result.
+- **JUnit dialect differences:** test reporting systems may use vendor-specific XML elements or semantics. Unknown tags are not inferred as failures; adapters should be extended and tested for each nonstandard dialect before relying on the result. Filesystems with coarse or unreliable modification timestamps may conservatively produce an inconclusive result. Timestamp checks are provenance signals, not cryptographic proof of file origin.
 - **Natural-language truth:** the engine does not establish factual truth of arbitrary text, summaries, or news analysis.
 - **Incomplete criteria:** poorly designed or overly broad criteria can produce misleading assurance even when mechanically satisfied.
 
