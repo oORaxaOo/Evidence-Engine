@@ -59,7 +59,7 @@ def _validate_xml_security(data: bytes) -> None:
         decoded = data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ValueError("JUnit XML must use UTF-8 encoding") from exc
-    if "\\x00" in decoded:
+    if "\x00" in decoded:
         raise ValueError("JUnit XML must use UTF-8 encoding")
     if _DTD_OR_ENTITY.search(decoded):
         raise ValueError("DOCTYPE and ENTITY declarations are not allowed")
