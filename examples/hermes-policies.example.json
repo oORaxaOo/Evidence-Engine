@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "projects": [
+    {
+      "root": "/ABSOLUTE/PATH/TO/YOUR/PROJECT",
+      "commands": [
+        {
+          "id": "compile",
+          "argv": [
+            "/usr/bin/python3",
+            "-m",
+            "compileall",
+            "-q",
+            "src"
+          ],
+          "timeout_seconds": 60,
+          "max_output_bytes": 262144
+        },
+        {
+          "id": "unit-tests",
+          "argv": [
+            "/ABSOLUTE/PATH/TO/YOUR/PROJECT/.venv/bin/python",
+            "-m",
+            "pytest",
+            "-q",
+            "--junitxml=junit.xml"
+          ],
+          "junit_xml": "junit.xml",
+          "timeout_seconds": 180,
+          "max_output_bytes": 262144
+        }
+      ]
+    }
+  ]
+}
