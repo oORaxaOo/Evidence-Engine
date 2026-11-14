@@ -177,4 +177,4 @@ See:
 
 ## License
 
-MIT
+Not selected yet. No license has been added to the repository.
