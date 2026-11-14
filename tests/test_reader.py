@@ -126,6 +126,25 @@ class EvidenceReaderTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_reader_rejects_a_verification_row_that_disagrees_with_its_report(self):
+        task_id = self.make_running_task()
+        self.record_success(task_id)
+        self.engine.finalize_task(task_id)
+
+        with self.engine._db() as db:
+            db.execute("DROP TRIGGER verification_no_update")
+            db.execute(
+                "UPDATE verifications SET status='inconclusive' WHERE task_id=?",
+                (task_id,),
+            )
+
+        report = EvidenceReader(self.database).get_task_report(task_id)
+
+        self.assertFalse(report["verification_record_valid"])
+        self.assertFalse(report["verification_current"])
+        self.assertEqual(report["effective_status"], TaskStatus.UNKNOWN.value)
+        self.assertEqual(report["reliability_note"], "verification_record_inconsistent")
+
     def test_reader_verifies_the_entire_evidence_hash_chain(self):
         task_id = self.make_running_task()
         self.record_success(task_id)
@@ -143,6 +162,12 @@ class EvidenceReaderTests(unittest.TestCase):
         report = reader.get_task_report(task_id)
         self.assertFalse(report["ledger_integrity"])
         self.assertEqual(report["effective_status"], TaskStatus.UNKNOWN.value)
+
+    def test_reader_rejects_non_finite_or_invalid_timeouts(self):
+        for value in (float("nan"), float("inf"), 0, -1, True, "3"):
+            with self.subTest(timeout=value):
+                with self.assertRaises(ValueError):
+                    EvidenceReader(self.database, timeout_seconds=value)
 
     def test_reader_does_not_create_a_missing_database(self):
         missing = Path(self.temp_dir.name) / "missing.sqlite3"
