@@ -23,7 +23,8 @@
 | Command runs indefinitely or produces unlimited output | Command adapter applies time and output limits, then records timeout/limit state |
 | Secrets appear in command evidence metadata | Operators can mask selected argv indexes; actual command arguments remain unchanged but stored/returned metadata uses `<redacted>` |
 | File adapter reads outside its configured roots | Relative-path policy rejects parent traversal and escaped symlinks |
-| Large or inconsistent test report claims success | JUnit adapter bounds input size and recomputes testcase counts instead of trusting summary attributes |\n| Old or replaced XML is presented as a fresh test result | JUnit adapter requires a matching CommandAdapter record, exact output path, and file modification time inside the command's start/completion interval |
+| Large or inconsistent test report claims success | JUnit adapter bounds input size and recomputes testcase counts instead of trusting summary attributes |
+| Old or replaced XML is presented as a fresh test result | JUnit adapter requires a matching CommandAdapter record, exact output path, and file modification time inside the command's start/completion interval |
 | XML entity expansion / DTD payload | JUnit adapter rejects DTD and ENTITY declarations before parsing |
 | Raw report content leaks into the evidence ledger | File and JUnit adapters store metadata and digests, not file contents |
 | Assistant mutates or rewrites evidence through its read interface | EvidenceReader uses SQLite read-only mode and exposes no mutating methods |
