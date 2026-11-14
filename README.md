@@ -2,31 +2,36 @@
 
 **Deterministic evidence recording and verification for tool-using assistants.**
 
-Evidence Engine is a small, model-independent foundation for a simple rule:
+Evidence Engine is a model-independent reliability layer for assistants such as Lilith/Hermes. Its central rule is:
 
 > A task is not successful because an assistant says it succeeded. It is successful only when predeclared, machine-checkable criteria are supported by recorded evidence.
 
-This project is being developed as a reliability layer for assistants such as Lilith/Hermes. It is deliberately independent of Hermes, WhatsApp, and any particular language model.
+It is deliberately independent of Hermes, WhatsApp, and any particular language model.
 
-## Current scope (v0.1 foundation)
+## Current scope
 
-- SQLite-backed task and evidence records.
-- Explicit task states: `planned`, `running`, `passed`, `failed`, `unknown`.
-- Success criteria are declared before execution and cannot be edited through the normal schema/API after task creation.
-- Evidence records are append-only through ordinary SQLite operations.
-- A SHA-256 hash chain detects changes to recorded evidence.
-- Deterministic verification supports `exists`, `eq`, and `gte` checks.
-- Missing or malformed evidence produces `unknown`, not success.
-- Contradictory evidence produces failure.
+- SQLite-backed tasks, structured evidence, and verification history.
+- Explicit task states: `planned`, `running`, `passed`, `failed`, and `unknown`.
+- Success criteria are fixed when a task is created and protected from normal SQL updates.
+- Append-only evidence and verification records through SQLite triggers.
+- SHA-256 hash chaining for evidence records.
+- Deterministic `exists`, `eq`, and `gte` criteria.
+- Atomic verification/finalization tied to the latest evidence sequence; later evidence invalidates an older verification.
+- Allowlisted command execution with fixed arguments, no shell invocation, timeouts, bounded output monitoring, and output hashes.
+- Allowlisted file snapshots with traversal/symlink checks and stable SHA-256 reads. File contents are not stored.
+- JUnit XML parsing tied to a command result, matching `--junitxml` path, and report timestamps bounded by the command run.
+- Read-only JSON-RPC 2.0 stdio bridge with a fixed method allowlist and bounded request lines.
 - No runtime dependencies; Python 3.11+.
 
 ## What it does not claim
 
-Evidence Engine is **not** a truth machine and does not prove that arbitrary natural-language statements are true. It checks structured observations against criteria that a trusted host has defined in advance.
+Evidence Engine is **not** a truth machine. It does not prove arbitrary natural-language statements, the quality of a test suite, or the correctness of a program. It checks structured observations against criteria defined by trusted host-side code or an operator.
 
-A hash chain is tamper-evident, not tamper-proof. Someone with direct database and filesystem control can rewrite the entire database and recompute the chain. Without an external checkpoint, deleting the tail of the chain also cannot be detected. Stronger deployments should anchor checkpoints outside the database and protect write access.
+A hash chain is tamper-evident, not tamper-proof. Someone with direct database and filesystem control can disable triggers, rewrite records, recompute the chain, or remove its tail. The verification table and task metadata are protected by ordinary SQLite triggers but are not part of the evidence hash chain. Stronger deployments need OS-level access controls and externally anchored, signed checkpoints.
 
-A `source` label is metadata, not cryptographic authentication. The future Hermes adapter must accept evidence only from trusted host-side adapters, never from free-form model output.
+A `source` label is descriptive metadata, not cryptographic authentication. Command and file policies must be created by trusted host code. Do not expose unrestricted `record_evidence`, `create_task`, adapter configuration, or database access as LLM tools. The language model should receive a separate read-only view of verification results.
+
+The command adapter is **not an OS sandbox**. A registered command can still do anything permitted to its operating-system user. The allowlist is only trustworthy when command specifications are operator-controlled and never constructed from model-supplied arguments.
 
 ## Quick start
 
@@ -40,43 +45,49 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 Example:
 
 ```python
+import sys
+from pathlib import Path
+
 from evidence_engine import Criterion, EvidenceEngine
+from evidence_engine.adapters import CommandAdapter, CommandSpec
 
 engine = EvidenceEngine("evidence.sqlite3")
 task = engine.create_task(
-    "RSS collector integration test",
-    [Criterion(
-        kind="command_exit",
-        field="return_code",
-        operator="eq",
-        expected=0,
-        source="collector-test-runner",
-    )],
+    "Small local verification",
+    [
+        Criterion(
+            kind="command_result",
+            field="return_code",
+            operator="eq",
+            expected=0,
+            source="evidence_engine.command_adapter:version-check",
+        )
+    ],
 )
 engine.start_task(task.task_id)
 
-# A trusted host-side adapter records the actual process result.
-engine.record_evidence(
-    task.task_id,
-    kind="command_exit",
-    source="collector-test-runner",
-    payload={"return_code": 0},
+# The complete command is fixed by trusted host configuration.
+spec = CommandSpec(
+    command_id="version-check",
+    argv=(sys.executable, "--version"),
+    cwd=Path.cwd(),
 )
-
+result = CommandAdapter([spec]).run(engine, task.task_id, "version-check")
 final_task = engine.finalize_task(task.task_id)
-print(final_task.status)  # passed only when the criterion is supported
-```
 
-**Security boundary:** the example's `record_evidence` call represents a trusted adapter. Do not expose unrestricted evidence-writing access as an LLM tool. The model should receive read-only task and verification reports.
+print(result.return_code)
+print(final_task.status)  # passed only if recorded evidence supports the criterion
+```
 
 ## Development status
 
-The foundation is intentionally narrow. The first release does not execute shell commands itself, inspect files, parse test reports, or connect to Hermes. Those belong in separately tested host-side adapters and later milestones.
+The adapters and generic read-only stdio bridge are local host-side components. The bridge is not yet wired into Hermes. OS sandboxing and external signed checkpoints are not implemented. No WhatsApp or Hermes configuration is changed by this repository.
 
 See:
 - [Architecture](docs/architecture.md)
+- [Adapters](docs/adapters.md)
 - [Threat model](docs/threat-model.md)
 
 ## License
 
-MIT
+Not selected yet.

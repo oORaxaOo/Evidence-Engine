@@ -69,6 +69,48 @@ class EvidenceEngineTests(unittest.TestCase):
                 )
         self.assertEqual(self.engine.get_task(task_id).status, TaskStatus.RUNNING)
 
+    def test_terminal_state_requires_the_latest_verification(self):
+        task_id = self.make_running_task()
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 0},
+        )
+        self.engine.verify_task(task_id)
+        with self.engine._db() as db:
+            db.execute(
+                """INSERT INTO verifications(
+                    verification_id,task_id,status,report_json,verified_at
+                ) VALUES(?,?,?,?,?)""",
+                ("later-inconclusive", task_id, "inconclusive", "{}", "2026-11-14T20:00:00+00:00"),
+            )
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task_id,),
+                )
+
+    def test_new_evidence_invalidates_an_older_success_verification(self):
+        task_id = self.make_running_task()
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 0},
+        )
+        first_report = self.engine.verify_task(task_id)
+        self.assertEqual(first_report.status.value, "supported")
+
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 9},
+        )
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task_id,),
+                )
+        self.assertEqual(self.engine.get_task(task_id).status, TaskStatus.RUNNING)
+
     def test_success_criteria_are_immutable(self):
         task = self.engine.create_task("Fixed contract", [Criterion("x", "ok")])
         with self.engine._db() as db:
@@ -78,6 +120,24 @@ class EvidenceEngineTests(unittest.TestCase):
                     (task.task_id,),
                 )
         self.assertEqual(len(self.engine.get_task(task.task_id).criteria), 1)
+
+    def test_concurrent_evidence_writes_keep_one_valid_hash_chain(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        task_id = self.make_running_task()
+
+        def record(index):
+            return self.engine.record_evidence(
+                task_id, kind="concurrent_observation", source="test-runner",
+                payload={"index": index},
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            evidence_ids = list(pool.map(record, range(24)))
+
+        self.assertEqual(len(evidence_ids), 24)
+        self.assertEqual(len(set(evidence_ids)), 24)
+        self.assertTrue(self.engine.verify_integrity())
 
     def test_ledger_detects_payload_tampering(self):
         task_id = self.make_running_task()
