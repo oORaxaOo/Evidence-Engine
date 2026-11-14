@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 import sys
+import time
 
 from evidence_engine import Criterion, EvidenceEngine, TaskStatus
 from evidence_engine.adapters import (
@@ -257,6 +258,21 @@ class JUnitReportAdapterTests(unittest.TestCase):
         self.assertFalse(result.available)
         self.assertIsNone(result.report_valid)
         self.assertIn("predates", result.inspection_error or "")
+        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
+
+    def test_report_modified_after_command_completion_is_inconclusive(self):
+        task_id = self.make_running_task()
+        command = self.run_report_command(task_id, write=False)
+        report_path = self.root / "junit.xml"
+        report_path.write_text(successful_report(), encoding="utf-8")
+        future_timestamp = time.time() + 60
+        os.utime(report_path, (future_timestamp, future_timestamp))
+
+        result = self.inspect(task_id, command)
+
+        self.assertFalse(result.available)
+        self.assertIsNone(result.report_valid)
+        self.assertIn("after the command completed", result.inspection_error or "")
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.UNKNOWN)
 
     def test_evidence_contains_digest_and_summary_but_never_raw_xml(self):
