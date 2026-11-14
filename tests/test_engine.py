@@ -59,6 +59,16 @@ class EvidenceEngineTests(unittest.TestCase):
                 )
         self.assertEqual(self.engine.get_task(task.task_id).status, TaskStatus.PLANNED)
 
+    def test_running_task_cannot_be_marked_passed_without_verification(self):
+        task_id = self.make_running_task()
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task_id,),
+                )
+        self.assertEqual(self.engine.get_task(task_id).status, TaskStatus.RUNNING)
+
     def test_success_criteria_are_immutable(self):
         task = self.engine.create_task("Fixed contract", [Criterion("x", "ok")])
         with self.engine._db() as db:
