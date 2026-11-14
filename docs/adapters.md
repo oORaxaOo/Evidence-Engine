@@ -105,3 +105,14 @@ The trusted host should own:
 - database access and schema migrations.
 
 A language model should receive only a read-only report interface. Do not expose raw database connections, `record_evidence`, adapter construction, or policy mutation as model tools.
+
+
+## Read-only assistant access
+
+The `EvidenceReader` façade opens an existing database with SQLite `mode=ro` and `query_only`. It exposes:
+- `get_task(task_id)`;
+- `list_evidence(task_id)`;
+- `get_latest_verification(task_id)`;
+- `verify_integrity()`.
+
+It has no task creation, status transition, evidence submission, or finalization methods. A host integration should wrap these methods in narrow read-only tools rather than exposing the reader's private connection method or any `EvidenceEngine` writer object.
