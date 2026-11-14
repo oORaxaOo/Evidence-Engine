@@ -1,0 +1,6 @@
+name: evidence-engine
+version: "0.2.0"
+description: Coding-only verification gate for Hermes Agent v0.23.1
+provides_hooks:
+  - pre_verify
+  - transform_llm_output
