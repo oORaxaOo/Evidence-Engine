@@ -195,11 +195,31 @@ class EvidenceEngine:
                     OR (OLD.status = 'unknown' AND NEW.status = 'running')
                     OR (
                         OLD.status = 'running'
-                        AND NEW.status IN ('passed', 'failed', 'unknown')
+                        AND NEW.status = 'passed'
+                        AND EXISTS (
+                            SELECT 1 FROM verifications
+                            WHERE task_id = OLD.task_id AND status = 'supported'
+                        )
+                    )
+                    OR (
+                        OLD.status = 'running'
+                        AND NEW.status = 'failed'
+                        AND EXISTS (
+                            SELECT 1 FROM verifications
+                            WHERE task_id = OLD.task_id AND status IN ('contradicted', 'invalid')
+                        )
+                    )
+                    OR (
+                        OLD.status = 'running'
+                        AND NEW.status = 'unknown'
+                        AND EXISTS (
+                            SELECT 1 FROM verifications
+                            WHERE task_id = OLD.task_id AND status = 'inconclusive'
+                        )
                     )
                 )
                 BEGIN
-                    SELECT RAISE(ABORT, 'invalid task status transition');
+                    SELECT RAISE(ABORT, 'invalid task status transition or missing verification');
                 END;
 
                 CREATE TRIGGER IF NOT EXISTS evidence_no_update
