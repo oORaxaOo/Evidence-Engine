@@ -13,6 +13,7 @@ class EvidenceBridgeTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.database = Path(self.temp_dir.name) / "evidence.sqlite3"
         writer = EvidenceEngine(self.database)
+        self.writer = writer
         task = writer.create_task(
             "Bridge read-only test",
             [
@@ -83,18 +84,33 @@ class EvidenceBridgeTests(unittest.TestCase):
         self.assertTrue(integrity["result"]["valid"])
 
     def test_evidence_pagination_is_forwarded_to_the_reader(self):
-        for value in (False, False):
-            self.reader  # keep the bridge backed by the same read-only reader
+        task = self.writer.create_task(
+            "Paginated evidence task",
+            [Criterion("probe", "value", "exists", source="trusted-test")],
+        )
+        self.writer.start_task(task.task_id)
+        for value in ("first", "second", "third"):
+            self.writer.record_evidence(
+                task.task_id,
+                kind="probe",
+                source="trusted-test",
+                payload={"value": value},
+            )
+
         response = self.bridge.handle(
             self.request(
                 "get_task_report",
-                {"task_id": self.task_id, "evidence_limit": 1, "evidence_offset": 0},
+                {"task_id": task.task_id, "evidence_limit": 1, "evidence_offset": 1},
             )
         )
 
-        self.assertEqual(response["result"]["evidence_total"], 1)
+        self.assertEqual(response["result"]["evidence_total"], 3)
         self.assertEqual(len(response["result"]["evidence"]), 1)
-        self.assertFalse(response["result"]["evidence_truncated"])
+        self.assertEqual(
+            response["result"]["evidence"][0]["payload"]["value"],
+            "second",
+        )
+        self.assertTrue(response["result"]["evidence_truncated"])
 
     def test_unknown_and_mutating_methods_are_not_exposed(self):
         for method in (
