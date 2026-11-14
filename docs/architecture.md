@@ -105,9 +105,21 @@ The JUnit adapter verifies the report artifact and its relationship to a recorde
 
 `EvidenceReader` opens an existing database using SQLite read-only mode and exposes task lookup, evidence listing, latest-verification lookup, and evidence-chain integrity checking. It has no task-creation, evidence-writing, or finalization methods. A Hermes integration should expose only selected reader methods through a narrow tool wrapper; it should not hand the model a raw database connection or the writer object.
 
+## Read-only stdio bridge
+
+`evidence_engine.bridge` implements a restricted JSON-RPC 2.0 request/response subset over newline-delimited stdin/stdout. It exposes only `get_task`, `list_evidence`, `get_latest_verification`, `verify_integrity`, and `get_task_report`. Unknown methods—including write, task creation, command execution, and SQL methods—are rejected. Incoming request lines are bounded to 1 MiB by default. The bridge returns structured JSON and does not forward database paths, SQL, or stack traces. It is a generic transport adapter, not an authentication boundary: the host must control how it is launched and which database it can read. JSON-RPC notifications are not supported.
+
+Start it from the repository root:
+
+```bash
+PYTHONPATH=src python -m evidence_engine.bridge --db /path/to/evidence.sqlite3
+```
+
+This does not install or configure a Hermes tool. A future Hermes integration must launch it under a controlled policy and expose only its read-only methods.
+
 ## Planned work
 
-- Hermes tool bridge that exposes the `EvidenceReader` surface only.
+- Hermes-specific tool registration for the read-only bridge.
 - Stronger OS-level process isolation and resource limits.
 - External signed checkpoints for the evidence chain and verification state.
 - Host-controlled policy management and deployment hardening.
