@@ -196,16 +196,20 @@ class CodingVerificationGate:
 
                         minimum = criterion.get("min_evidence", 1)
                         check_ids = check.get("evidence_ids")
+                        valid_check_ids = (
+                            isinstance(check_ids, list)
+                            and all(
+                                isinstance(item, str) and item in evidence_ids
+                                for item in check_ids
+                            )
+                        )
                         if (
                             isinstance(minimum, bool)
                             or not isinstance(minimum, int)
                             or minimum < 1
-                            or not isinstance(check_ids, list)
+                            or not valid_check_ids
+                            or len(check_ids) < minimum
                             or len(set(check_ids)) < minimum
-                            or any(
-                                not isinstance(item, str) or item not in evidence_ids
-                                for item in check_ids
-                            )
                         ):
                             reasons.append(f"criterion_{position}_evidence_missing")
 
