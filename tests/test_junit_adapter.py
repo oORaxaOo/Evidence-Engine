@@ -211,7 +211,7 @@ class JUnitReportAdapterTests(unittest.TestCase):
         task_id = self.make_running_task()
         command = self.run_registered_report_command(task_id, VALID_XML)
 
-        with self.assertRaises(PermissionError):
+        with self.assertRaises(ValueError):
             self.adapter.inspect(
                 self.engine,
                 task_id,
