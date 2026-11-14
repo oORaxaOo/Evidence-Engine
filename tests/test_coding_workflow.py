@@ -172,6 +172,30 @@ class CodingWorkflowTests(unittest.TestCase):
         self.assertFalse(decision.released)
         self.assertIn("ledger_integrity", decision.reasons)
 
+
+    def test_ledger_integrity_failure_escalates_without_retrying_code(self):
+        calls = []
+
+        def execute(context, feedback):
+            calls.append(context.task_id)
+            self.record_success(context.task_id)
+            with self.engine._db() as db:
+                db.execute("DROP TRIGGER evidence_no_update")
+                db.execute(
+                    "UPDATE evidence SET payload_json='{}' WHERE task_id=?",
+                    (context.task_id,),
+                )
+
+        result = CodingWorkflow(
+            self.engine, self.reader, max_attempts=5
+        ).run("Corrupted evidence ledger", self.criteria, execute)
+
+        self.assertFalse(result.completed)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(result.attempts), 1)
+        self.assertIn("ledger_integrity", result.attempts[0].decision.reasons)
+        self.assertEqual(result.stop_reason, "verification_integrity_failure")
+
     def test_retry_limit_is_bounded_and_validated(self):
         for value in (0, 6, True, 1.5):
             with self.subTest(value=value):
