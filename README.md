@@ -20,7 +20,7 @@ It is deliberately independent of Hermes, WhatsApp, and any particular language 
 - Allowlisted command execution with fixed arguments, no shell invocation, timeouts, bounded output monitoring, and output hashes.
 - Allowlisted file snapshots with traversal/symlink checks and stable SHA-256 reads. File contents are not stored.
 - JUnit XML parsing tied to a command result, matching `--junitxml` path, and report timestamps bounded by the command run.
-- No runtime dependencies; Python 3.11+.
+- Read-only JSON-RPC 2.0 stdio bridge with a fixed method allowlist and bounded request lines.\n- No runtime dependencies; Python 3.11+.
 
 ## What it does not claim
 
@@ -80,7 +80,7 @@ print(final_task.status)  # passed only if recorded evidence supports the criter
 
 ## Development status
 
-The adapters are local host-side components. A read-only `EvidenceReader` façade is implemented. The Hermes tool bridge, OS sandboxing, and external signed checkpoints are not implemented yet. No WhatsApp or Hermes configuration is changed by this repository.
+The adapters and generic read-only stdio bridge are local host-side components. The bridge is not yet wired into Hermes. OS sandboxing and external signed checkpoints are not implemented. No WhatsApp or Hermes configuration is changed by this repository.
 
 See:
 - [Architecture](docs/architecture.md)
