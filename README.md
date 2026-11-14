@@ -41,7 +41,7 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 
 ### Run an allowlisted command
 
-The executable and complete argument vector are defined by trusted host code. A caller can select a registered command ID but cannot append arguments or change its working directory, environment, timeout, or output limit.
+The executable and complete argument vector are defined by trusted host code. A caller can select a registered command ID but cannot append arguments or change its working directory, environment, timeout, or output limit. Operators can designate sensitive argv positions with `redacted_argument_indexes`; the command still receives the original values, but the adapter's result object and persisted evidence contain `<redacted>` at those positions. Indexes include argv[0]. Never redact an argument that a downstream verifier needs to compare, such as the `--junitxml` report path.
 
 ```python
 import sys
@@ -127,7 +127,7 @@ summary = reports.inspect(
 final_task = engine.finalize_task(task.task_id)
 ```
 
-The report adapter reads a bounded file from an allowlisted root. It records the computed counts, metadata consistency, file size, and SHA-256 digest. It never stores the raw XML. Missing, unreadable, unstable, or oversized reports create attempt evidence but no valid report evidence, so criteria depending on a report remain `unknown`. Malformed XML creates an invalid report observation.
+The report adapter reads a bounded UTF-8 XML file from an allowlisted root. It requires a preceding trusted `CommandAdapter` result, an exact match to that command's fixed `--junitxml` output path, and a file modification time between the command's recorded start and completion. It records recomputed counts, metadata consistency, file size, and SHA-256 digest, never raw XML. DTD/entity declarations and non-UTF-8 XML are rejected. Missing, unreadable, unstable, oversized, stale, or post-command-modified reports create attempt evidence but no report observation, so report criteria remain `unknown`. Malformed or unsafe XML creates an invalid report observation.
 
 **Security boundary:** do not expose unrestricted `record_evidence`, adapter construction, or arbitrary command-policy creation as LLM tools. The model should receive read-only task and verification reports.
 
