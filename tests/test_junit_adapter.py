@@ -187,21 +187,31 @@ class JUnitReportAdapterTests(unittest.TestCase):
         self.assertIn("DOCTYPE", result.inspection_error)
         self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
 
-    def test_utf16_dtd_and_entity_document_is_rejected(self):
+    def test_utf16_dtd_and_entity_documents_are_rejected_with_or_without_bom(self):
         xml_text = """<!DOCTYPE testsuite [<!ENTITY x "expanded">]>
         <testsuite tests="1"><testcase name="&x;"/></testsuite>"""
-        xml_bytes = xml_text.encode("utf-16")
-        task_id = self.make_running_task()
-        command = self.run_report_command(task_id, xml_bytes)
-
-        result = self.inspect(task_id, command)
-
-        self.assertFalse(result.report_valid)
-        self.assertTrue(
-            "UTF-8" in (result.inspection_error or "")
-            or "DOCTYPE" in (result.inspection_error or "")
+        encodings = (
+            xml_text.encode("utf-16"),
+            xml_text.encode("utf-16-be"),
+            xml_text.encode("utf-16-le"),
         )
-        self.assertEqual(self.engine.finalize_task(task_id).status, TaskStatus.FAILED)
+
+        for index, xml_bytes in enumerate(encodings):
+            with self.subTest(encoding=index):
+                task_id = self.make_running_task()
+                report_name = f"junit-{index}.xml"
+                command = self.run_report_command(
+                    task_id, xml_bytes, name=report_name
+                )
+
+                result = self.inspect(task_id, command, path=report_name)
+
+                self.assertFalse(result.report_valid)
+                self.assertIn("UTF-8", result.inspection_error or "")
+                self.assertEqual(
+                    self.engine.finalize_task(task_id).status,
+                    TaskStatus.FAILED,
+                )
 
     def test_missing_report_is_inconclusive_not_a_pass_or_failure(self):
         task_id = self.make_running_task()
