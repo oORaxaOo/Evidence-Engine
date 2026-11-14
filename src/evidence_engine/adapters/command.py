@@ -30,6 +30,10 @@ _COMMAND_ID = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
 _ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_TIMEOUT_SECONDS = 60.0
 _MAX_CAPTURE_BYTES = 1024 * 1024
+_SHELL_EXECUTABLES = frozenset({
+    "sh", "bash", "dash", "zsh", "fish", "ksh", "csh", "tcsh",
+    "cmd.exe", "powershell.exe", "pwsh.exe",
+})
 
 
 def _utc_now() -> str:
@@ -59,7 +63,7 @@ class CommandSpec:
         if isinstance(self.argv, (str, bytes)):
             raise ValueError("argv must be a sequence of fixed argument strings")
         argv = tuple(self.argv)
-        if not argv or not all(isinstance(item, str) and item and "\\x00" not in item for item in argv):
+        if not argv or not all(isinstance(item, str) and item and "\x00" not in item for item in argv):
             raise ValueError("argv must contain non-empty strings without NUL characters")
 
         executable = Path(argv[0])
@@ -71,6 +75,8 @@ class CommandSpec:
             raise ValueError(f"executable path is not available: {exc}") from exc
         if not executable.is_file() or not os.access(executable, os.X_OK):
             raise ValueError("the executable must be an existing executable file")
+        if executable.name.lower() in _SHELL_EXECUTABLES:
+            raise ValueError("shell executables are not allowed in command policies")
         object.__setattr__(self, "argv", (str(executable), *argv[1:]))
 
         try:
@@ -108,7 +114,7 @@ class CommandSpec:
                 or not _ENV_KEY.fullmatch(key)
                 or key in seen
                 or not isinstance(value, str)
-                or "\\x00" in value
+                or "\x00" in value
             ):
                 raise ValueError("environment contains an invalid or duplicate entry")
             seen.add(key)
