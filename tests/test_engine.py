@@ -54,7 +54,7 @@ class EvidenceEngineTests(unittest.TestCase):
             task_id, kind="command_exit", source="test-runner",
             payload={"return_code": 0},
         )
-        with self.engine._connect() as db:
+        with self.engine._db() as db:
             db.execute("DROP TRIGGER evidence_no_update")
             db.execute("UPDATE evidence SET payload_json='{}'")
         self.assertFalse(self.engine.verify_integrity())
@@ -63,13 +63,21 @@ class EvidenceEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Criterion("count", "items", operator="gte", expected=True)
 
+    def test_naive_observation_timestamp_is_rejected(self):
+        task_id = self.make_running_task()
+        with self.assertRaises(ValueError):
+            self.engine.record_evidence(
+                task_id, kind="command_exit", source="test-runner",
+                payload={"return_code": 0}, observed_at="2026-11-14T12:00:00",
+            )
+
     def test_evidence_is_append_only_under_normal_sql_operations(self):
         task_id = self.make_running_task()
         evidence_id = self.engine.record_evidence(
             task_id, kind="command_exit", source="test-runner",
             payload={"return_code": 0},
         )
-        with self.engine._connect() as db:
+        with self.engine._db() as db:
             with self.assertRaises(Exception):
                 db.execute("DELETE FROM evidence WHERE evidence_id=?", (evidence_id,))
 
