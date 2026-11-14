@@ -207,6 +207,36 @@ class CodingWorkflowTests(unittest.TestCase):
         self.assertFalse(decision.released)
         self.assertIn("criterion_1_evidence_missing", decision.reasons)
 
+
+    def test_gate_rejects_malformed_evidence_reference_values(self):
+        task = self.engine.create_task(
+            "Malformed reference check",
+            (
+                Criterion(
+                    kind="build_result",
+                    field="return_code",
+                    operator="eq",
+                    expected=0,
+                    source="trusted-build",
+                ),
+            ),
+        )
+        self.engine.start_task(task.task_id)
+        self.engine.record_evidence(
+            task.task_id,
+            kind="build_result",
+            source="trusted-build",
+            payload={"return_code": 0},
+        )
+        self.engine.finalize_task(task.task_id)
+        report = self.reader.get_task_report(task.task_id)
+        report["verification"]["report"]["checks"][0]["evidence_ids"] = [{"bad": "id"}]
+
+        decision = CodingVerificationGate().evaluate(report)
+
+        self.assertFalse(decision.released)
+        self.assertIn("criterion_1_evidence_missing", decision.reasons)
+
     def test_ledger_integrity_failure_escalates_without_retrying_code(self):
         calls = []
 
