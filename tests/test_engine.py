@@ -90,6 +90,27 @@ class EvidenceEngineTests(unittest.TestCase):
                     (task_id,),
                 )
 
+    def test_new_evidence_invalidates_an_older_success_verification(self):
+        task_id = self.make_running_task()
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 0},
+        )
+        first_report = self.engine.verify_task(task_id)
+        self.assertEqual(first_report.status.value, "supported")
+
+        self.engine.record_evidence(
+            task_id, kind="command_exit", source="test-runner",
+            payload={"return_code": 9},
+        )
+        with self.engine._db() as db:
+            with self.assertRaises(sqlite3.IntegrityError):
+                db.execute(
+                    "UPDATE tasks SET status='passed' WHERE task_id=?",
+                    (task_id,),
+                )
+        self.assertEqual(self.engine.get_task(task_id).status, TaskStatus.RUNNING)
+
     def test_success_criteria_are_immutable(self):
         task = self.engine.create_task("Fixed contract", [Criterion("x", "ok")])
         with self.engine._db() as db:
