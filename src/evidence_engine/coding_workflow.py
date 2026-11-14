@@ -23,6 +23,24 @@ from .reader import EvidenceReader
 _MAX_ATTEMPTS = 5
 _MAX_EVIDENCE_PAGE = 500
 _WORKFLOW_SOURCE = "evidence_engine.coding_workflow"
+_NON_RETRYABLE_GATE_REASONS = frozenset({
+    "invalid_report",
+    "task_record_missing",
+    "task_id_missing",
+    "success_criteria_missing",
+    "ledger_integrity",
+    "verification_not_current",
+    "verification_record_invalid",
+    "verification_record_inconsistent",
+    "verification_sequence_mismatch",
+    "evidence_truncated",
+    "evidence_snapshot_incomplete",
+    "evidence_identifiers_invalid",
+    "verification_missing",
+    "verification_report_missing",
+    "verification_task_mismatch",
+    "criterion_check_count_mismatch",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +394,16 @@ class CodingWorkflow:
                     final_task_id=task.task_id,
                     final_report=report,
                     stop_reason="verified",
+                )
+
+            if set(decision.reasons) & _NON_RETRYABLE_GATE_REASONS:
+                return CodingWorkflowResult(
+                    completed=False,
+                    workflow_id=workflow_id,
+                    attempts=tuple(attempts),
+                    final_task_id=task.task_id,
+                    final_report=report,
+                    stop_reason="verification_integrity_failure",
                 )
 
             previous_task_id = task.task_id
