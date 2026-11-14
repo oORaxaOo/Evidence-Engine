@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from evidence_engine import Criterion, EvidenceEngine, TaskStatus, VerificationStatus
+from evidence_engine import Criterion, EvidenceEngine, TaskStatus
 
 
 class EvidenceEngineTests(unittest.TestCase):
@@ -11,7 +11,6 @@ class EvidenceEngineTests(unittest.TestCase):
         self.engine = EvidenceEngine(Path(self.temp_dir.name) / "evidence.sqlite3")
 
     def tearDown(self):
-        self.engine.close if hasattr(self.engine, "close") else None
         self.temp_dir.cleanup()
 
     def make_running_task(self, operator="eq", expected=0):
