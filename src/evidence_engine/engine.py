@@ -181,16 +181,34 @@ class EvidenceEngine:
                     task_id TEXT NOT NULL REFERENCES tasks(task_id),
                     status TEXT NOT NULL,
                     report_json TEXT NOT NULL,
-                    verified_at TEXT NOT NULL
+                    verified_at TEXT NOT NULL,
+                    evidence_sequence INTEGER NOT NULL DEFAULT 0
                 );
+                """
+            )
 
+            verification_columns = {
+                row["name"] for row in db.execute("PRAGMA table_info(verifications)")
+            }
+            if "evidence_sequence" not in verification_columns:
+                db.execute(
+                    "ALTER TABLE verifications "
+                    "ADD COLUMN evidence_sequence INTEGER NOT NULL DEFAULT 0"
+                )
+
+            # Recreate this guard so existing databases receive the current
+            # status + evidence-sequence binding as part of the schema upgrade.
+            db.executescript(
+                """
                 CREATE TRIGGER IF NOT EXISTS task_criteria_immutable
                 BEFORE UPDATE OF criteria_json ON tasks
                 BEGIN
                     SELECT RAISE(ABORT, 'task criteria are immutable');
                 END;
 
-                CREATE TRIGGER IF NOT EXISTS task_status_transition_guard
+                DROP TRIGGER IF EXISTS task_status_transition_guard;
+
+                CREATE TRIGGER task_status_transition_guard
                 BEFORE UPDATE OF status ON tasks
                 WHEN NOT (
                     (OLD.status = 'planned' AND NEW.status = 'running')
@@ -203,6 +221,14 @@ class EvidenceEngine:
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
                         ), '') = 'supported'
+                        AND COALESCE((
+                            SELECT evidence_sequence FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ), -1) = COALESCE((
+                            SELECT MAX(sequence) FROM evidence
+                            WHERE task_id = OLD.task_id
+                        ), 0)
                     )
                     OR (
                         OLD.status = 'running'
@@ -212,6 +238,14 @@ class EvidenceEngine:
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
                         ), '') IN ('contradicted', 'invalid')
+                        AND COALESCE((
+                            SELECT evidence_sequence FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ), -1) = COALESCE((
+                            SELECT MAX(sequence) FROM evidence
+                            WHERE task_id = OLD.task_id
+                        ), 0)
                     )
                     OR (
                         OLD.status = 'running'
@@ -221,10 +255,18 @@ class EvidenceEngine:
                             WHERE task_id = OLD.task_id
                             ORDER BY rowid DESC LIMIT 1
                         ), '') = 'inconclusive'
+                        AND COALESCE((
+                            SELECT evidence_sequence FROM verifications
+                            WHERE task_id = OLD.task_id
+                            ORDER BY rowid DESC LIMIT 1
+                        ), -1) = COALESCE((
+                            SELECT MAX(sequence) FROM evidence
+                            WHERE task_id = OLD.task_id
+                        ), 0)
                     )
                 )
                 BEGIN
-                    SELECT RAISE(ABORT, 'invalid task status transition or missing verification');
+                    SELECT RAISE(ABORT, 'invalid task transition or stale/missing verification');
                 END;
 
                 CREATE TRIGGER IF NOT EXISTS evidence_no_update
@@ -367,9 +409,8 @@ class EvidenceEngine:
             for row in rows
         )
 
-    def verify_integrity(self) -> bool:
-        with self._db() as db:
-            rows = db.execute("SELECT * FROM evidence ORDER BY sequence").fetchall()
+    def _verify_integrity_in_db(self, db: sqlite3.Connection) -> bool:
+        rows = db.execute("SELECT * FROM evidence ORDER BY sequence").fetchall()
         previous_hash = self.GENESIS_HASH
         for row in rows:
             record = {
@@ -386,29 +427,74 @@ class EvidenceEngine:
             previous_hash = row["record_hash"]
         return True
 
-    def verify_task(self, task_id: str) -> VerificationReport:
-        task = self.get_task(task_id)
-        evidence = self.list_evidence(task_id)
-        if not self.verify_integrity():
+    def verify_integrity(self) -> bool:
+        with self._db() as db:
+            return self._verify_integrity_in_db(db)
+
+    def _verify_task_in_db(
+        self,
+        db: sqlite3.Connection,
+        task_id: str,
+    ) -> VerificationReport:
+        task_row = db.execute(
+            "SELECT * FROM tasks WHERE task_id=?",
+            (task_id,),
+        ).fetchone()
+        if task_row is None:
+            raise KeyError(f"unknown task: {task_id}")
+
+        criteria = tuple(
+            Criterion(**item) for item in json.loads(task_row["criteria_json"])
+        )
+        evidence_rows = db.execute(
+            "SELECT * FROM evidence WHERE task_id=? ORDER BY sequence",
+            (task_id,),
+        ).fetchall()
+        evidence_sequence = max(
+            (row["sequence"] for row in evidence_rows),
+            default=0,
+        )
+
+        if not self._verify_integrity_in_db(db):
             checks = tuple(
-                CriterionResult(i, VerificationStatus.INVALID, "evidence ledger integrity check failed", (), ())
-                for i, _ in enumerate(task.criteria, start=1)
+                CriterionResult(
+                    index,
+                    VerificationStatus.INVALID,
+                    "evidence ledger integrity check failed",
+                    (),
+                    (),
+                )
+                for index, _ in enumerate(criteria, start=1)
             )
             overall = VerificationStatus.INVALID
         else:
+            evidence = [
+                {
+                    "evidence_id": row["evidence_id"],
+                    "kind": row["kind"],
+                    "source": row["source"],
+                    "payload": json.loads(row["payload_json"]),
+                }
+                for row in evidence_rows
+            ]
             checks_list: list[CriterionResult] = []
-            for index, criterion in enumerate(task.criteria, start=1):
+            for index, criterion in enumerate(criteria, start=1):
                 matching = [
-                    item for item in evidence
+                    item
+                    for item in evidence
                     if item["kind"] == criterion.kind
                     and (criterion.source is None or item["source"] == criterion.source)
                 ]
                 if len(matching) < criterion.min_evidence:
-                    checks_list.append(CriterionResult(
-                        index, VerificationStatus.INCONCLUSIVE,
-                        f"insufficient evidence: required {criterion.min_evidence}, found {len(matching)}",
-                        tuple(item["evidence_id"] for item in matching), (),
-                    ))
+                    checks_list.append(
+                        CriterionResult(
+                            index,
+                            VerificationStatus.INCONCLUSIVE,
+                            f"insufficient evidence: required {criterion.min_evidence}, found {len(matching)}",
+                            tuple(item["evidence_id"] for item in matching),
+                            (),
+                        )
+                    )
                     continue
 
                 observed: list[Any] = []
@@ -425,7 +511,10 @@ class EvidenceEngine:
                     if criterion.operator == "exists":
                         mismatch += int(actual is None)
                     elif criterion.operator == "eq":
-                        mismatch += int(type(actual) is not type(criterion.expected) or actual != criterion.expected)
+                        mismatch += int(
+                            type(actual) is not type(criterion.expected)
+                            or actual != criterion.expected
+                        )
                     elif criterion.operator == "gte":
                         if isinstance(actual, bool) or not isinstance(actual, (int, float)):
                             invalid += 1
@@ -437,56 +526,105 @@ class EvidenceEngine:
                     message = f"criterion contradicted by {mismatch} observation(s)"
                 elif missing or invalid:
                     status = VerificationStatus.INCONCLUSIVE
-                    message = f"insufficient structured data: {missing} missing field(s), {invalid} invalid value(s)"
+                    message = (
+                        f"insufficient structured data: {missing} missing field(s), "
+                        f"{invalid} invalid value(s)"
+                    )
                 else:
                     status = VerificationStatus.SUPPORTED
                     message = f"criterion supported by {len(matching)} observation(s)"
-                checks_list.append(CriterionResult(
-                    index, status, message,
-                    tuple(item["evidence_id"] for item in matching), tuple(observed),
-                ))
+                checks_list.append(
+                    CriterionResult(
+                        index,
+                        status,
+                        message,
+                        tuple(item["evidence_id"] for item in matching),
+                        tuple(observed),
+                    )
+                )
+
             checks = tuple(checks_list)
-            if any(item.status is VerificationStatus.CONTRADICTED for item in checks):
+            if any(
+                check.status is VerificationStatus.CONTRADICTED for check in checks
+            ):
                 overall = VerificationStatus.CONTRADICTED
-            elif any(item.status is not VerificationStatus.SUPPORTED for item in checks):
+            elif any(
+                check.status is not VerificationStatus.SUPPORTED for check in checks
+            ):
                 overall = VerificationStatus.INCONCLUSIVE
             else:
                 overall = VerificationStatus.SUPPORTED
 
-        report = VerificationReport(task_id, overall, checks, _now())
-        report_json = _canonical_json({
-            "task_id": task_id,
-            "status": overall.value,
-            "verified_at": report.verified_at,
-            "checks": [
-                {
-                    "index": check.index,
-                    "status": check.status.value,
-                    "message": check.message,
-                    "evidence_ids": list(check.evidence_ids),
-                    "observed_values": list(check.observed_values),
-                }
-                for check in checks
-            ],
-        })
-        with self._db() as db:
-            db.execute(
-                "INSERT INTO verifications(verification_id,task_id,status,report_json,verified_at) VALUES(?,?,?,?,?)",
-                (uuid.uuid4().hex, task_id, overall.value, report_json, report.verified_at),
-            )
+        verified_at = _now()
+        report = VerificationReport(task_id, overall, checks, verified_at)
+        report_json = _canonical_json(
+            {
+                "task_id": task_id,
+                "status": overall.value,
+                "verified_at": report.verified_at,
+                "evidence_sequence": evidence_sequence,
+                "checks": [
+                    {
+                        "index": check.index,
+                        "status": check.status.value,
+                        "message": check.message,
+                        "evidence_ids": list(check.evidence_ids),
+                        "observed_values": list(check.observed_values),
+                    }
+                    for check in checks
+                ],
+            }
+        )
+        db.execute(
+            """
+            INSERT INTO verifications(
+                verification_id, task_id, status, report_json, verified_at,
+                evidence_sequence
+            ) VALUES(?,?,?,?,?,?)
+            """,
+            (
+                uuid.uuid4().hex,
+                task_id,
+                overall.value,
+                report_json,
+                verified_at,
+                evidence_sequence,
+            ),
+        )
         return report
 
+    def verify_task(self, task_id: str) -> VerificationReport:
+        # A RESERVED write lock keeps the evidence snapshot stable while the
+        # independent verification record is generated and committed.
+        with self._db(immediate=True) as db:
+            return self._verify_task_in_db(db, task_id)
+
     def finalize_task(self, task_id: str) -> Task:
-        task = self.get_task(task_id)
-        if task.status is not TaskStatus.RUNNING:
-            raise ValueError("only a running task can be finalized")
-        report = self.verify_task(task_id)
-        if report.status is VerificationStatus.SUPPORTED:
-            status = TaskStatus.PASSED
-        elif report.status is VerificationStatus.CONTRADICTED or report.status is VerificationStatus.INVALID:
-            status = TaskStatus.FAILED
-        else:
-            status = TaskStatus.UNKNOWN
-        with self._db() as db:
-            db.execute("UPDATE tasks SET status=? WHERE task_id=?", (status.value, task_id))
+        # Verification and final state transition share one transaction. No
+        # evidence append can slip between the checked snapshot and finalization.
+        with self._db(immediate=True) as db:
+            task = db.execute(
+                "SELECT status FROM tasks WHERE task_id=?",
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                raise KeyError(f"unknown task: {task_id}")
+            if task["status"] != TaskStatus.RUNNING.value:
+                raise ValueError("only a running task can be finalized")
+
+            report = self._verify_task_in_db(db, task_id)
+            if report.status is VerificationStatus.SUPPORTED:
+                status = TaskStatus.PASSED
+            elif report.status in {
+                VerificationStatus.CONTRADICTED,
+                VerificationStatus.INVALID,
+            }:
+                status = TaskStatus.FAILED
+            else:
+                status = TaskStatus.UNKNOWN
+
+            db.execute(
+                "UPDATE tasks SET status=? WHERE task_id=?",
+                (status.value, task_id),
+            )
         return self.get_task(task_id)
