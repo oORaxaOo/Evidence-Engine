@@ -20,7 +20,8 @@ It is deliberately independent of Hermes, WhatsApp, and any particular language 
 - Allowlisted command execution with fixed arguments, no shell invocation, timeouts, bounded output monitoring, and output hashes.
 - Allowlisted file snapshots with traversal/symlink checks and stable SHA-256 reads. File contents are not stored.
 - JUnit XML parsing tied to a command result, matching `--junitxml` path, and report timestamps bounded by the command run.
-- Read-only JSON-RPC 2.0 stdio bridge with a fixed method allowlist and bounded request lines.\n- No runtime dependencies; Python 3.11+.
+- Read-only JSON-RPC 2.0 stdio bridge with a fixed method allowlist and bounded request lines.
+- No runtime dependencies; Python 3.11+.
 
 ## What it does not claim
 
