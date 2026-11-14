@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Deterministic evidence ledger and task verification for tool-using assistants"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
 authors = [{ name = "Evidence Engine contributors" }]
 dependencies = []
 
