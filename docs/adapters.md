@@ -116,3 +116,29 @@ The `EvidenceReader` façade opens an existing database with SQLite `mode=ro` an
 - `verify_integrity()`.
 
 It has no task creation, status transition, evidence submission, or finalization methods. A host integration should wrap these methods in narrow read-only tools rather than exposing the reader's private connection method or any `EvidenceEngine` writer object.
+
+
+## Read-only JSON-RPC stdio bridge
+
+The generic bridge reads one JSON-RPC 2.0 request per input line and writes one JSON response per output line. It exposes only:
+- `get_task`;
+- `list_evidence`;
+- `get_latest_verification`;
+- `verify_integrity`;
+- `get_task_report` (a combined read-only snapshot).
+
+Example request:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"get_task_report","params":{"task_id":"TASK_ID"}}
+```
+
+Start it from the repository root:
+
+```bash
+PYTHONPATH=src python -m evidence_engine.bridge --db /path/to/evidence.sqlite3
+```
+
+The default maximum input line is 1 MiB. Oversized lines are rejected and discarded before the next request is read. The bridge does not support notifications, arbitrary SQL, command execution, policy changes, or any write method. It keeps protocol responses on stdout; startup diagnostics go to stderr.
+
+This is a generic stdio transport, not a Hermes plugin or a complete MCP server. The host must decide which process can launch it, which database it can read, and whether the assistant is allowed to invoke it. Do not expose the underlying EvidenceEngine writer or raw database path as another tool.
