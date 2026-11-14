@@ -56,6 +56,7 @@ class HermesPluginIntegrationTests(unittest.TestCase):
         script = (
             "from pathlib import Path; "
             f"Path('junit.xml').write_text({junit!r}, encoding='utf-8')"
+            + ("; raise SystemExit(1)" if exit_code else "")
         )
         policy = {
             "schema_version": 1,
