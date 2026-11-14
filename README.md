@@ -80,21 +80,32 @@ print(result.return_code, final_task.status)
 ```python
 from pathlib import Path
 
-from evidence_engine import EvidenceEngine
+from evidence_engine import Criterion, EvidenceEngine
 from evidence_engine.adapters import FilePolicy, JUnitReportAdapter
 
 engine = EvidenceEngine("evidence.sqlite3")
 task = engine.create_task(
     "Inspect test report",
-    # Declare JUnit report criteria before starting the task.
-    criteria,
+    [
+        Criterion("junit_report", "report_valid", "eq", True, "evidence_engine.junit_report_adapter"),
+        Criterion("junit_report", "metadata_consistent", "eq", True, "evidence_engine.junit_report_adapter"),
+        Criterion("junit_report", "failures", "eq", 0, "evidence_engine.junit_report_adapter"),
+        Criterion("junit_report", "errors", "eq", 0, "evidence_engine.junit_report_adapter"),
+    ],
 )
 engine.start_task(task.task_id)
 
+# command_evidence_id must identify a preceding CommandAdapter result whose
+# fixed argv contains the exact --junitxml=artifacts/junit.xml output path.
 reports = JUnitReportAdapter(
     FilePolicy(allowed_roots=(Path("artifacts"),))
 )
-summary = reports.inspect(engine, task.task_id, "junit.xml")
+summary = reports.inspect(
+    engine,
+    task.task_id,
+    "junit.xml",
+    command_evidence_id=command_result.evidence_id,
+)
 ```
 
 The report adapter reads a bounded file from an allowlisted root. It records the computed counts, metadata consistency, file size, and SHA-256 digest. It never stores the raw XML. Missing, unreadable, unstable, or oversized reports create attempt evidence but no valid report evidence, so criteria depending on a report remain `unknown`. Malformed XML creates an invalid report observation.
