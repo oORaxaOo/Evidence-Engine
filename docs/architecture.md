@@ -73,7 +73,7 @@ Path resolution and file identity checks reduce common path and symlink mistakes
 
 ### JUnit report adapter
 
-The JUnit adapter accepts relative report paths beneath a `FilePolicy` allowlist. It reads at most the configured file limit, checks file identity before and after the read, and stores no raw XML.
+The JUnit adapter accepts relative report paths beneath a `FilePolicy` allowlist. It requires a matching `command_result` record from the trusted CommandAdapter, verifies that the command's fixed argument vector names this exact `--junitxml` output path, and checks that the report modification time falls between command start and completion. It reads at most the configured file limit, checks file identity before and after the read, and stores no raw XML.
 
 It:
 
