@@ -242,6 +242,7 @@ class JUnitReportAdapter:
             "command_id": command_payload.get("command_id"),
             "command_return_code": command_payload.get("return_code"),
             "command_started_at": command_payload.get("started_at"),
+            "command_finished_at": command_payload.get("finished_at"),
             "report_valid": valid,
             "metadata_consistent": metadata_consistent,
             "parse_status": "valid" if valid else "invalid",
