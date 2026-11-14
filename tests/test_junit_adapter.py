@@ -183,6 +183,24 @@ class JUnitReportAdapterTests(unittest.TestCase):
         self.assertEqual(report.parse_status, "inconclusive")
         self.assertIn("predates", report.inspection_error or "")
 
+    def test_report_modified_after_command_exit_is_inconclusive(self):
+        import time
+
+        task_id = self.make_running_task()
+        command = self.run_registered_report_command(task_id, "", write=False)
+        time.sleep(0.02)
+        (self.root / "report.xml").write_text(VALID_XML, encoding="utf-8")
+
+        report = self.adapter.inspect(
+            self.engine,
+            task_id,
+            "report.xml",
+            command_evidence_id=command.evidence_id,
+        )
+
+        self.assertEqual(report.parse_status, "inconclusive")
+        self.assertIn("after command", report.inspection_error or "")
+
     def test_report_path_must_match_the_registered_command_argument(self):
         task_id = self.make_running_task()
         command = self.run_registered_report_command(
