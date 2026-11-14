@@ -101,9 +101,13 @@ The JUnit adapter verifies the report artifact and its relationship to a recorde
 4. **Reports are derived.** The model may summarize a report but must not change its status or evidence.
 5. **Write access stays host-side.** A future Hermes integration should expose a separate read-only API to the model, never a raw database handle or unrestricted evidence-writing method.
 
+## Read-only access
+
+`EvidenceReader` opens an existing database using SQLite read-only mode and exposes task lookup, evidence listing, latest-verification lookup, and evidence-chain integrity checking. It has no task-creation, evidence-writing, or finalization methods. A Hermes integration should expose only selected reader methods through a narrow tool wrapper; it should not hand the model a raw database connection or the writer object.
+
 ## Planned work
 
-- Dedicated read-only API for assistant access.
+- Hermes tool bridge that exposes the `EvidenceReader` surface only.
 - Stronger OS-level process isolation and resource limits.
 - External signed checkpoints for the evidence chain and verification state.
-- Hermes bridge with host-controlled task contracts and command/file policies.
+- Host-controlled policy management and deployment hardening.
