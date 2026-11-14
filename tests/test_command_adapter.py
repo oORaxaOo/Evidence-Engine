@@ -145,6 +145,31 @@ class CommandAdapterTests(unittest.TestCase):
                 cwd=Path(self.temp_dir.name),
             )
 
+    def test_sensitive_arguments_are_redacted_from_stored_evidence(self):
+        task_id = self.make_running_task()
+        secret = "token=do-not-store-this"
+        spec = CommandSpec(
+            command_id="test",
+            argv=(sys.executable, "-c", "pass", secret),
+            cwd=Path(self.temp_dir.name),
+            redacted_argument_indexes=(3,),
+        )
+        result = CommandAdapter([spec]).run(self.engine, task_id, "test")
+
+        self.assertEqual(result.return_code, 0)
+        evidence_text = repr(self.engine.list_evidence(task_id))
+        self.assertNotIn(secret, evidence_text)
+        self.assertIn("<redacted>", evidence_text)
+
+    def test_redaction_indexes_must_be_within_the_command_argv(self):
+        with self.assertRaises(ValueError):
+            CommandSpec(
+                command_id="test",
+                argv=(sys.executable, "-c", "pass"),
+                cwd=Path(self.temp_dir.name),
+                redacted_argument_indexes=(3,),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
