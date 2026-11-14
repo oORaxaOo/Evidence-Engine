@@ -78,15 +78,26 @@ print(result.return_code, final_task.status)
 ### Inspect a JUnit report
 
 ```python
+import sys
 from pathlib import Path
 
 from evidence_engine import Criterion, EvidenceEngine
-from evidence_engine.adapters import FilePolicy, JUnitReportAdapter
+from evidence_engine.adapters import (
+    CommandAdapter,
+    CommandSpec,
+    FilePolicy,
+    JUnitReportAdapter,
+)
 
+artifacts = Path("artifacts").resolve()
+artifacts.mkdir(exist_ok=True)
 engine = EvidenceEngine("evidence.sqlite3")
 task = engine.create_task(
     "Inspect test report",
     [
+        Criterion("command_result", "process_started", "eq", True, "evidence_engine.command_adapter:pytest"),
+        Criterion("command_result", "timed_out", "eq", False, "evidence_engine.command_adapter:pytest"),
+        Criterion("command_result", "return_code", "eq", 0, "evidence_engine.command_adapter:pytest"),
         Criterion("junit_report", "report_valid", "eq", True, "evidence_engine.junit_report_adapter"),
         Criterion("junit_report", "metadata_consistent", "eq", True, "evidence_engine.junit_report_adapter"),
         Criterion("junit_report", "failures", "eq", 0, "evidence_engine.junit_report_adapter"),
@@ -95,17 +106,25 @@ task = engine.create_task(
 )
 engine.start_task(task.task_id)
 
-# command_evidence_id must identify a preceding CommandAdapter result whose
-# fixed argv contains the exact --junitxml=artifacts/junit.xml output path.
-reports = JUnitReportAdapter(
-    FilePolicy(allowed_roots=(Path("artifacts"),))
-)
+# This fixed operator-defined command creates the report. Callers cannot
+# append arbitrary arguments or change its output path at runtime.
+commands = CommandAdapter([
+    CommandSpec(
+        command_id="pytest",
+        argv=(sys.executable, "-m", "pytest", "--junitxml=artifacts/junit.xml"),
+        cwd=Path.cwd(),
+    )
+])
+command_result = commands.run(engine, task.task_id, "pytest")
+
+reports = JUnitReportAdapter(FilePolicy(allowed_roots=(artifacts,)))
 summary = reports.inspect(
     engine,
     task.task_id,
     "junit.xml",
     command_evidence_id=command_result.evidence_id,
 )
+final_task = engine.finalize_task(task.task_id)
 ```
 
 The report adapter reads a bounded file from an allowlisted root. It records the computed counts, metadata consistency, file size, and SHA-256 digest. It never stores the raw XML. Missing, unreadable, unstable, or oversized reports create attempt evidence but no valid report evidence, so criteria depending on a report remain `unknown`. Malformed XML creates an invalid report observation.
