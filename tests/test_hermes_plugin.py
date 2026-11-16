@@ -12,9 +12,13 @@ from evidence_engine.hermes_plugin import register
 
 
 class FakeContext:
-    def __init__(self):
+    def __init__(self, settings=None):
         self.hooks = {}
         self.hook_options = {}
+        self.settings = settings or {}
+
+    def get_config(self, key, default=None):
+        return self.settings.get(key, default)
 
     def register_hook(self, name, callback, **kwargs):
         self.hooks[name] = callback
@@ -83,7 +87,7 @@ class HermesPluginIntegrationTests(unittest.TestCase):
         self.policy_file.write_text(json.dumps(policy), encoding="utf-8")
         self.policy_file.chmod(0o600)
 
-    def _register(self, *, max_attempts=5):
+    def _register(self, *, max_attempts=5, kie_event_socket=None):
         env = {
             "EVIDENCE_ENGINE_DB": str(self.database),
             "EVIDENCE_ENGINE_POLICY_FILE": str(self.policy_file),
@@ -92,7 +96,7 @@ class HermesPluginIntegrationTests(unittest.TestCase):
         self.env_patch = patch.dict(os.environ, env)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
-        ctx = FakeContext()
+        ctx = FakeContext({"kie_event_socket": kie_event_socket})
         register(ctx)
         self.assertIn("pre_verify", ctx.hooks)
         self.assertIn("transform_llm_output", ctx.hooks)
@@ -227,3 +231,16 @@ class HermesPluginIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+    def test_policy_failure_publishes_only_allowlisted_health_code_to_kie(self):
+        with patch("evidence_engine.hermes_plugin.publish_verification_unavailable") as publish:
+            ctx = self._register(kie_event_socket="/tmp/kie-engine-events.sock")
+            result = self._pre_verify(ctx)
+
+        self.assertIsNone(result)
+        publish.assert_called_once_with(
+            "/tmp/kie-engine-events.sock",
+            "policy_invalid",
+        )
