@@ -8,8 +8,3 @@ config_schema:
   kie_event_socket:
     type: string
     default: "~/.hermes/run/kie-engine-events.sock"
-
-config_schema:
-  kie_event_socket:
-    type: string
-    default: "~/.hermes/run/kie-engine-events.sock"
