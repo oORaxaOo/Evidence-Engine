@@ -4,3 +4,7 @@ description: Coding-only verification gate for Hermes Agent v0.23.1
 provides_hooks:
   - pre_verify
   - transform_llm_output
+config_schema:
+  kie_event_socket:
+    type: string
+    default: "~/.hermes/run/kie-engine-events.sock"
