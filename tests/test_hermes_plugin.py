@@ -229,9 +229,6 @@ class HermesPluginIntegrationTests(unittest.TestCase):
         self.assertIn("not verified", transformed.lower())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 
     def test_policy_failure_publishes_only_allowlisted_health_code_to_kie(self):
@@ -244,3 +241,8 @@ if __name__ == "__main__":
             "/tmp/kie-engine-events.sock",
             "policy_invalid",
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
+
