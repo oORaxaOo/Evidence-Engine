@@ -21,6 +21,7 @@ from .adapters.junit import JUnitReportAdapter
 from .coding_workflow import CodingVerificationGate
 from .engine import Criterion, EvidenceEngine
 from .reader import EvidenceReader
+from .kie_events import publish_verification_unavailable
 
 _PLUGIN_ID = "evidence-engine"
 _DEFAULT_DB = Path.home() / ".hermes" / "evidence-engine" / "evidence.sqlite3"
@@ -285,6 +286,21 @@ def register(ctx: Any) -> None:
             f"EVIDENCE_ENGINE_MAX_ATTEMPTS must be an integer from 1 to {_MAX_ATTEMPTS}"
         )
 
+    try:
+        kie_event_socket = ctx.get_config(
+            "kie_event_socket",
+            str(Path.home() / ".hermes" / "run" / "kie-engine-events.sock"),
+        )
+    except Exception:
+        kie_event_socket = None
+
+    def publish_kie_failure(code: str) -> None:
+        # Failure publication is advisory and must never alter the fail-closed coding gate.
+        try:
+            publish_verification_unavailable(kie_event_socket, code)
+        except Exception:
+            pass
+
     pending_by_session: dict[str, dict[str, Any]] = {}
 
     def on_pre_verify(
@@ -308,6 +324,7 @@ def register(ctx: Any) -> None:
             return None
 
         if config_error:
+            publish_kie_failure("configuration_missing")
             pending_by_session[key] = {
                 "released": False,
                 "reason": config_error,
@@ -466,6 +483,9 @@ def register(ctx: Any) -> None:
         except Exception as exc:
             # The final-output transform consumes this fail-closed state. Do not
             # let a hook exception silently turn an unverified coding result green.
+            publish_kie_failure(
+                "policy_invalid" if isinstance(exc, PolicyError) else "verification_exception"
+            )
             pending_by_session[key] = {
                 "released": False,
                 "reason": (
